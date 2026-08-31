@@ -13,3 +13,6 @@ node_modules/
 
 # 系统文件
 .DS_Store
+
+# AI 工具本地状态（archon/cursor 等，含凭证哈希，勿提交）
+.archon/
