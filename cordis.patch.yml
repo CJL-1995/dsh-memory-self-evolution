@@ -1,0 +1,10 @@
+# dsh-memory-self-evolution — bundle patch layer.
+#
+# Installing this package into a profile (`dsh plugin --profile <name> add dsh-memory-self-evolution`)
+# appends it to `dsh.profile.bundles`; this patch is then applied as that
+# bundle's layer. The row below loads the package's main entry as the host
+# half (a plain Cordis plugin) and, because the package declares `dsh.client`,
+# the web app also loads its `./client` bundle as the browser half.
+- insert:
+    - id: dsh-memory-self-evolution
+      name: dsh-memory-self-evolution
