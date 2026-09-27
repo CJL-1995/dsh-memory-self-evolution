@@ -1,5 +1,5 @@
-# 依赖
-node_modules/
+# 依赖（不带斜杠，同时覆盖指向 profile 依赖的软链）
+node_modules
 
 # transformers.js 模型缓存
 .cache/
