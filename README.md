@@ -1,4 +1,4 @@
-# dsh-memory-self-evolution
+# memory-self-evolution
 
 给 **Cursor** 和 **codebuddy** 用的自进化长期记忆。它把你在对话里表达过的偏好、规范和项目事实沉淀下来，靠本地向量模型按相关性召回，并让记忆随使用频率增长、随闲置时间衰减。
 
@@ -24,7 +24,7 @@
 需要 Node 20 以上。clone 到本机后执行这一行，依赖安装和两端注册会一起做完：
 
 ```bash
-git clone <司内仓库地址> && cd dsh-memory-self-evolution && npm install && npm run setup
+git clone https://github.com/CJL-1995/memory-self-evolution.git && cd memory-self-evolution && npm install && npm run setup
 ```
 
 已经 clone 过、只需要重新注册时：
