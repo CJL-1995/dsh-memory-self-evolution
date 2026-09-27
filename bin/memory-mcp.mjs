@@ -278,7 +278,7 @@ async function handle(req) {
     return {
       protocolVersion: (params && params.protocolVersion) || PROTOCOL_VERSION,
       capabilities: { tools: {} },
-      serverInfo: { name: 'dsh-memory', version: '0.2.0' },
+      serverInfo: { name: 'memory-self-evolution', version: '0.2.0' },
     }
   }
   if (method === 'tools/list') return { tools: TOOLS }

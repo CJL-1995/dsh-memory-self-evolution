@@ -11,7 +11,7 @@ import path from 'node:path'
 const DIM = 768
 const SIZES = [100, 1000, 10000, 50000]
 // 读盘一列在 jsonl 下改为流式解析，否则 5 万条会直接抛 RangeError
-const TMP = path.join(os.tmpdir(), 'dsh-memory-scale')
+const TMP = path.join(os.tmpdir(), 'memory-self-evolution-scale')
 
 const ms = (t) => `${t.toFixed(1)}ms`
 const now = () => performance.now()

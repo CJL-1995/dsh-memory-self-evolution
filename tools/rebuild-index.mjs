@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 按当前模型重建 ~/.dsh-memory/embeddings.jsonl。
+// 按当前模型重建 ~/.memory-self-evolution/embeddings.jsonl。
 // 换 embedding 模型后插件本来会在下次 analyzeSession 自动重建，
 // 但那之前有一轮会降级成「最近 N 条」兜底；离线预建可以免掉这一轮。
 // 用法：node tools/rebuild-index.mjs

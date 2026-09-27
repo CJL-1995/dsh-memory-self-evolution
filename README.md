@@ -2,7 +2,7 @@
 
 给 **Cursor** 和 **codebuddy** 用的自进化长期记忆。它把你在对话里表达过的偏好、规范和项目事实沉淀下来，靠本地向量模型按相关性召回，并让记忆随使用频率增长、随闲置时间衰减。
 
-记忆存在 `~/.dsh-memory/`，两端共用同一份，不上云。
+记忆存在 `~/.memory-self-evolution/`，两端共用同一份，不上云。
 
 ## 它解决什么
 
@@ -37,12 +37,12 @@ npm install && npm run setup
 
 | 客户端 | hook | MCP |
 |---|---|---|
-| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop` | `mcp.json` 的 `dsh-memory` |
-| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `dsh-memory` |
+| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop` | `mcp.json` 的 `memory-self-evolution` |
+| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
 
 没有安装的客户端会跳过。已有的其他 hook 和 MCP 会保留。本插件已经注册过时，只更新 node 与仓库路径，不会追加第二条。hook 里必须写 node 的绝对路径，脚本会处理；手写相对路径时，hook 失败是静默的。
 
-记忆数据在 `~/.dsh-memory/`，按用户分开，不会随仓库分发。同事装完是空记忆库。首次召回或沉淀会下载向量模型（`bge-base-zh-v1.5`，约 98MB），之后离线。
+记忆数据在 `~/.memory-self-evolution/`，按用户分开，不会随仓库分发。同事装完是空记忆库。首次召回或沉淀会下载向量模型（`bge-base-zh-v1.5`，约 98MB），之后离线。
 
 注册完成后重启 Cursor 和 codebuddy，MCP 才会加载。
 
@@ -53,21 +53,21 @@ npm install && npm run setup
 **自己直接写。** 不想经过模型判断时：
 
 ```bash
-node bin/dsh-memory.mjs rule add "所有异常处理处都需要添加日志"
+node bin/memory.mjs rule add "所有异常处理处都需要添加日志"
 ```
 
-**从历史会话里捞。** 每轮结束时 `stop` hook 会扫一遍对话，把带「以后」「记住」「别再」「一律」这类跨轮次标志的表达收进候选池并累计出现次数——跨会话反复出现的才值得沉淀，一次性噪音只会出现一次。用 `memory_review` 或 `node bin/dsh-memory.mjs review` 查看并确认。
+**从历史会话里捞。** 每轮结束时 `stop` hook 会扫一遍对话，把带「以后」「记住」「别再」「一律」这类跨轮次标志的表达收进候选池并累计出现次数——跨会话反复出现的才值得沉淀，一次性噪音只会出现一次。用 `memory_review` 或 `node bin/memory.mjs review` 查看并确认。
 
 ## 命令
 
 ```bash
-node bin/dsh-memory.mjs list                  # 两组各有多少条
-node bin/dsh-memory.mjs read rule             # 看规则
-node bin/dsh-memory.mjs read project          # 看项目事实
-node bin/dsh-memory.mjs rule add "<规则>"      # 直接新增规则
-node bin/dsh-memory.mjs review                # 待确认候选
-node bin/dsh-memory.mjs config                # 查看配置
-node bin/dsh-memory.mjs config recallTopK 15  # 改配置
+node bin/memory.mjs list                  # 两组各有多少条
+node bin/memory.mjs read rule             # 看规则
+node bin/memory.mjs read project          # 看项目事实
+node bin/memory.mjs rule add "<规则>"      # 直接新增规则
+node bin/memory.mjs review                # 待确认候选
+node bin/memory.mjs config                # 查看配置
+node bin/memory.mjs config recallTopK 15  # 改配置
 npm run setup                                 # 注册 Cursor / codebuddy
 npm run verify                                # 跑召回回归测试
 ```
@@ -89,7 +89,7 @@ npm run verify                                # 跑召回回归测试
 
 ## 配置
 
-`~/.dsh-memory/config.json`，不存在时用默认值。
+`~/.memory-self-evolution/config.json`，不存在时用默认值。
 
 | 键 | 默认 | 说明 |
 |---|---|---|

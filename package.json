@@ -1,11 +1,11 @@
 {
-  "name": "dsh-memory-self-evolution",
+  "name": "memory-self-evolution",
   "version": "0.2.0",
   "description": "为 Cursor 与 codebuddy 提供的自进化长期记忆：本地向量语义召回、置信度演化、跨会话沉淀，通过 hook 注入与 MCP 工具接入",
   "type": "module",
   "bin": {
-    "dsh-memory": "./bin/dsh-memory.mjs",
-    "dsh-memory-mcp": "./bin/dsh-memory-mcp.mjs"
+    "memory-self-evolution": "./bin/memory.mjs",
+    "memory-mcp": "./bin/memory-mcp.mjs"
   },
   "files": [
     "bin",
@@ -24,7 +24,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CJL-1995/dsh-memory-self-evolution.git"
+    "url": "git+https://github.com/CJL-1995/memory-self-evolution.git"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0"

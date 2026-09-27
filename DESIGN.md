@@ -9,7 +9,7 @@
 ```
 lib/core/          平台无关，不依赖任何宿主的 API
   config.mjs       路径与常量
-  settings.mjs     用户可调配置（~/.dsh-memory/config.json）
+  settings.mjs     用户可调配置（~/.memory-self-evolution/config.json）
   store.mjs        记忆读取
   writer.mjs       记忆写入、置信度演化、分组推断
   recall.mjs       向量索引、中心化、召回门控
@@ -17,18 +17,18 @@ lib/core/          平台无关，不依赖任何宿主的 API
   candidates.mjs   候选池、transcript 解析
 lib/embedding.js   向量模型与向量运算
 bin/
-  dsh-memory.mjs      hook 适配 + 人工 CLI
-  dsh-memory-mcp.mjs  MCP server（stdio，JSON-RPC 2.0）
+  memory.mjs      hook 适配 + 人工 CLI
+  memory-mcp.mjs  MCP server（stdio，JSON-RPC 2.0）
 ```
 
-两端的差异全部收敛在 `bin/dsh-memory.mjs` 里：Cursor 用 camelCase 事件名、输入字段 `prompt`、输出 `additional_context`；codebuddy（Claude Code 系）用 PascalCase 事件名、输入 `user_prompt`、输出 `hookSpecificOutput.additionalContext`。`mcp.json` 两端格式一致，同一份配置复用。
+两端的差异全部收敛在 `bin/memory.mjs` 里：Cursor 用 camelCase 事件名、输入字段 `prompt`、输出 `additional_context`；codebuddy（Claude Code 系）用 PascalCase 事件名、输入 `user_prompt`、输出 `hookSpecificOutput.additionalContext`。`mcp.json` 两端格式一致，同一份配置复用。
 
 选**短命 CLI 进程**而不是常驻守护进程：模型冷启动实测 104ms，加上 node 启动后整轮 0.23 秒，远在 Cursor 给的 5 秒预算内。省掉了单实例管理、健康检查、崩溃重启这一整套复杂度，也天然没有并发竞争。
 
 ### 存储布局
 
 ```
-~/.dsh-memory/
+~/.memory-self-evolution/
   rule.jsonl        无条件生效的规则与偏好
   project.jsonl     按需召回的项目事实
   embeddings.jsonl  向量索引，每行 { id, v, ev }

@@ -3,12 +3,12 @@
 // 人工也可直接用 list / read / rule 等子命令管理记忆库。
 //
 // 用法：
-//   dsh-memory hook [--agent cursor|codebuddy]   从 stdin 读 hook 事件，按事件类型注入或收集候选
-//   dsh-memory list                              列出两组记忆的条数
-//   dsh-memory read <rule|project>               打印该组记忆
-//   dsh-memory rule add "<规则>"                  直接新增一条规则，不经模型判断
-//   dsh-memory config [key] [value]              查看或修改配置
-//   dsh-memory review                            列出待确认候选
+//   memory-self-evolution hook [--agent cursor|codebuddy]   从 stdin 读 hook 事件，按事件类型注入或收集候选
+//   memory-self-evolution list                              列出两组记忆的条数
+//   memory-self-evolution read <rule|project>               打印该组记忆
+//   memory-self-evolution rule add "<规则>"                  直接新增一条规则，不经模型判断
+//   memory-self-evolution config [key] [value]              查看或修改配置
+//   memory-self-evolution review                            列出待确认候选
 //
 // hook 按事件分派：session-start 注入 rule 全量，prompt 注入 Top-K 召回，stop 收集候选。
 //
@@ -147,7 +147,7 @@ async function runList() {
 
 async function runRead(group) {
   if (!GROUPS.includes(group)) {
-    console.error(`用法：dsh-memory read <${GROUPS.join('|')}>`)
+    console.error(`用法：memory-self-evolution read <${GROUPS.join('|')}>`)
     process.exitCode = 1
     return
   }
@@ -166,7 +166,7 @@ async function runRead(group) {
 // 直接新增规则，不经模型判断——用户说了就是规则。
 async function runRuleAdd(text) {
   if (!text) {
-    console.error('用法：dsh-memory rule add "<规则内容>"')
+    console.error('用法：memory-self-evolution rule add "<规则内容>"')
     process.exitCode = 1
     return
   }
@@ -183,7 +183,7 @@ async function runConfig(key, value) {
     return
   }
   if (value === undefined) {
-    console.error('用法：dsh-memory config <key> <value>')
+    console.error('用法：memory-self-evolution config <key> <value>')
     process.exitCode = 1
     return
   }
@@ -222,7 +222,7 @@ try {
   } else if (cmd === 'review') {
     await runReview()
   } else {
-    console.error('用法：dsh-memory <hook|list|read|rule add|config|review> [参数]')
+    console.error('用法：memory-self-evolution <hook|list|read|rule add|config|review> [参数]')
     process.exitCode = 1
   }
 } catch (e) {

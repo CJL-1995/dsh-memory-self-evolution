@@ -6,7 +6,7 @@ node_modules
 *.onnx
 
 # 运行时记忆数据
-.dsh-memory/
+.memory-self-evolution/
 
 # 日志
 *.log

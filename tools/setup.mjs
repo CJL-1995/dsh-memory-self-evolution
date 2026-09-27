@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const nodeBin = process.execPath
-const hookScript = path.join(repoRoot, 'bin', 'dsh-memory.mjs')
-const mcpScript = path.join(repoRoot, 'bin', 'dsh-memory-mcp.mjs')
+const hookScript = path.join(repoRoot, 'bin', 'memory.mjs')
+const mcpScript = path.join(repoRoot, 'bin', 'memory-mcp.mjs')
 
 const CURSOR_EVENTS = [
   { event: 'sessionStart', timeout: 10 },
@@ -30,7 +30,7 @@ function hookCommand(agent) {
 
 function isOurHook(command, agent) {
   const text = String(command || '')
-  return text.includes('dsh-memory.mjs') && text.includes(`hook --agent ${agent}`)
+  return text.includes('memory.mjs') && text.includes(`hook --agent ${agent}`)
 }
 
 function readJson(file, fallback) {
@@ -80,8 +80,9 @@ function upsertCodebuddyHook(list, command, timeout) {
 function registerMcp(file) {
   const data = readJson(file, { mcpServers: {} })
   if (!data.mcpServers || typeof data.mcpServers !== 'object') data.mcpServers = {}
-  const existed = Boolean(data.mcpServers['dsh-memory'])
-  data.mcpServers['dsh-memory'] = {
+  const existed = Boolean(data.mcpServers['memory-self-evolution'] || data.mcpServers['dsh-memory'])
+  delete data.mcpServers['dsh-memory']
+  data.mcpServers['memory-self-evolution'] = {
     type: 'stdio',
     command: nodeBin,
     args: [mcpScript],
@@ -128,9 +129,18 @@ function registerCodebuddy(home) {
   return `hooks ${notes.join(', ')}; mcp ${mcp}`
 }
 
+function migrateDataDir(home) {
+  const oldDir = path.join(home, '.dsh-memory')
+  const newDir = path.join(home, '.memory-self-evolution')
+  if (!fs.existsSync(oldDir) || fs.existsSync(newDir)) return
+  fs.renameSync(oldDir, newDir)
+  console.log(`已把 ${oldDir} 迁到 ${newDir}`)
+}
+
 const home = os.homedir()
+migrateDataDir(home)
 console.log(`node ${nodeBin}`)
 console.log(`仓库 ${repoRoot}`)
 console.log(`Cursor：${registerCursor(home)}`)
 console.log(`codebuddy：${registerCodebuddy(home)}`)
-console.log('记忆数据在 ~/.dsh-memory/，不会随仓库分发。重启客户端后 MCP 才会加载。')
+console.log('记忆数据在 ~/.memory-self-evolution/，不会随仓库分发。重启客户端后 MCP 才会加载。')
