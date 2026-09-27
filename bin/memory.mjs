@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 各宿主共用的记忆 CLI。Cursor / codebuddy 通过 hook 调用本入口拿注入文本，
+// 各宿主共用的记忆 CLI。Cursor / codebuddy / WorkBuddy 通过 hook 调用本入口拿注入文本，
 // 人工也可直接用 list / read / rule 等子命令管理记忆库。
 //
 // 用法：
-//   memory-self-evolution hook [--agent cursor|codebuddy]   从 stdin 读 hook 事件，按事件类型注入或收集候选
+//   memory-self-evolution hook [--agent cursor|codebuddy|workbuddy]   从 stdin 读 hook 事件，按事件类型注入或收集候选
 //   memory-self-evolution list                              列出两组记忆的条数
 //   memory-self-evolution read <rule|project>               打印该组记忆
 //   memory-self-evolution rule add "<规则>"                  直接新增一条规则，不经模型判断
@@ -23,11 +23,14 @@ import { collectCandidates, extractUserQueries, listCandidates } from '../lib/co
 import { persistMemory, refreshDeprecated } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
 
-// Cursor 用 camelCase 事件名 + prompt 字段；codebuddy（Claude Code 系）用 PascalCase + user_prompt。
-const CODEBUDDY_EVENTS = new Set(['UserPromptSubmit', 'SessionStart', 'Stop'])
+// Cursor 用 camelCase 事件名 + prompt 字段，输出 additional_context。
+// codebuddy 与 WorkBuddy 都是 Claude Code 系：PascalCase 事件名，输出 hookSpecificOutput.additionalContext。
+// 输入字段两边都能读：codebuddy 给 user_prompt，WorkBuddy 给 prompt。
+const CLAUDE_STYLE_AGENTS = new Set(['codebuddy', 'workbuddy'])
+const CLAUDE_STYLE_EVENTS = new Set(['UserPromptSubmit', 'SessionStart', 'Stop'])
 const CURSOR_EVENTS = new Set(['beforeSubmitPrompt', 'sessionStart', 'stop'])
 
-// 两端事件名归一成语义相同的三类。
+// 三端事件名归一成语义相同的三类。
 const EVENT_KIND = {
   sessionStart: 'session-start',
   SessionStart: 'session-start',
@@ -54,7 +57,7 @@ function readStdin() {
 function detectAgent(argv, event) {
   const flagIdx = argv.indexOf('--agent')
   if (flagIdx >= 0 && argv[flagIdx + 1]) return argv[flagIdx + 1]
-  if (CODEBUDDY_EVENTS.has(event)) return 'codebuddy'
+  if (CLAUDE_STYLE_EVENTS.has(event)) return 'codebuddy'
   if (CURSOR_EVENTS.has(event)) return 'cursor'
   return 'cursor'
 }
@@ -62,7 +65,7 @@ function detectAgent(argv, event) {
 // 不同宿主的注入字段名不同，统一在这里转换。
 function wrapInjection(agent, event, text) {
   if (!text) return {}
-  if (agent === 'codebuddy') {
+  if (CLAUDE_STYLE_AGENTS.has(agent)) {
     return {
       hookSpecificOutput: {
         hookEventName: event || 'UserPromptSubmit',

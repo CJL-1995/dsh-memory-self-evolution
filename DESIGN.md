@@ -21,7 +21,7 @@ bin/
   memory-mcp.mjs  MCP server（stdio，JSON-RPC 2.0）
 ```
 
-两端的差异全部收敛在 `bin/memory.mjs` 里：Cursor 用 camelCase 事件名、输入字段 `prompt`、输出 `additional_context`；codebuddy（Claude Code 系）用 PascalCase 事件名、输入 `user_prompt`、输出 `hookSpecificOutput.additionalContext`。`mcp.json` 两端格式一致，同一份配置复用。
+三端的差异全部收敛在 `bin/memory.mjs` 里：Cursor 用 camelCase 事件名、输入字段 `prompt`、输出 `additional_context`；codebuddy 与 WorkBuddy（Claude Code 系）用 PascalCase 事件名、输出 `hookSpecificOutput.additionalContext`。codebuddy 的输入字段是 `user_prompt`，WorkBuddy 是 `prompt`，两边都会读。`mcp.json` 三端格式一致，同一份配置复用。WorkBuddy 把 `CODEBUDDY_CONFIG_DIR` 指到 `~/.workbuddy`，所以 hook 与 MCP 写在该目录，不和 `~/.codebuddy` 混用。
 
 选**短命 CLI 进程**而不是常驻守护进程：模型冷启动实测 104ms，加上 node 启动后整轮 0.23 秒，远在 Cursor 给的 5 秒预算内。省掉了单实例管理、健康检查、崩溃重启这一整套复杂度，也天然没有并发竞争。
 
@@ -218,7 +218,7 @@ bin/
 
 ## 7. 并发与容错
 
-多端（Cursor / codebuddy 可能同开）加短命进程会有多个进程同时写：
+多端（Cursor / codebuddy / WorkBuddy 可能同开）加短命进程会有多个进程同时写：
 
 - **新增记忆**走 `O_APPEND` 追加单行，小于 4096 字节时内核保证原子
 - **强化、标记变更、索引、配置**走「临时文件 + rename」

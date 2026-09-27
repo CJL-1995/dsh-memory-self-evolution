@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 给当前用户注册 Cursor 与 codebuddy 的 hook 和 MCP。
+// 给当前用户注册 Cursor、codebuddy 与 WorkBuddy 的 hook 和 MCP。
 // 已有其他 hook / MCP 会保留。本插件已注册时只更新 node 与仓库路径，不重复追加。
 // 用法：npm install && npm run setup
 
@@ -60,10 +60,10 @@ function upsertCursorHook(list, command, timeout) {
   return 'added'
 }
 
-function upsertCodebuddyHook(list, command, timeout) {
+function upsertClaudeStyleHook(list, command, timeout, agent) {
   for (const group of list) {
     const hooks = Array.isArray(group && group.hooks) ? group.hooks : []
-    const found = hooks.find((item) => isOurHook(item && item.command, 'codebuddy'))
+    const found = hooks.find((item) => isOurHook(item && item.command, agent))
     if (!found) continue
     found.type = 'command'
     found.command = command
@@ -111,17 +111,19 @@ function registerCursor(home) {
   return `hooks ${notes.join(', ')}; mcp ${mcp}`
 }
 
-function registerCodebuddy(home) {
-  const dir = path.join(home, '.codebuddy')
+// codebuddy 与 WorkBuddy 都是 Claude Code 系：settings.json 里的 hooks，mcp.json 里的 MCP。
+// WorkBuddy 启动 CLI 时把 CODEBUDDY_CONFIG_DIR 指到 ~/.workbuddy，所以两套配置必须分开写。
+function registerClaudeStyle(home, dirName, agent) {
+  const dir = path.join(home, dirName)
   if (!fs.existsSync(dir)) return '未安装，已跳过'
   const settingsFile = path.join(dir, 'settings.json')
   const data = readJson(settingsFile, { hooks: {} })
   if (!data.hooks || typeof data.hooks !== 'object') data.hooks = {}
-  const command = hookCommand('codebuddy')
+  const command = hookCommand(agent)
   const notes = []
   for (const spec of CODEBUDDY_EVENTS) {
     if (!Array.isArray(data.hooks[spec.event])) data.hooks[spec.event] = []
-    const action = upsertCodebuddyHook(data.hooks[spec.event], command, spec.timeout)
+    const action = upsertClaudeStyleHook(data.hooks[spec.event], command, spec.timeout, agent)
     notes.push(`${spec.event} ${action}`)
   }
   writeJson(settingsFile, data)
@@ -142,5 +144,6 @@ migrateDataDir(home)
 console.log(`node ${nodeBin}`)
 console.log(`仓库 ${repoRoot}`)
 console.log(`Cursor：${registerCursor(home)}`)
-console.log(`codebuddy：${registerCodebuddy(home)}`)
+console.log(`codebuddy：${registerClaudeStyle(home, '.codebuddy', 'codebuddy')}`)
+console.log(`WorkBuddy：${registerClaudeStyle(home, '.workbuddy', 'workbuddy')}`)
 console.log('记忆数据在 ~/.memory-self-evolution/，不会随仓库分发。重启客户端后 MCP 才会加载。')

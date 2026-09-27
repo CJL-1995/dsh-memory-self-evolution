@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 三端共用的记忆 MCP server（stdio，JSON-RPC 2.0，换行分隔）。
-// Cursor 与 codebuddy 的 mcp.json 格式一致，同一份配置两端复用。
+// Cursor、codebuddy 与 WorkBuddy 的 mcp.json 格式一致，同一份配置三端复用。
 // 手写协议而不引依赖：这个 server 要被短命/常驻两种方式反复启动，依赖越少启动越快、越不易坏。
 
 import { GROUPS, READ_LIMIT } from '../lib/core/config.mjs'
@@ -31,7 +31,7 @@ const TOOLS = [
   {
     name: 'memory_propose',
     description:
-      '提交一条值得长期记住的记忆（用户的偏好、规范、项目事实，或对同一件事的第二次纠正）。本工具不直接落盘：它返回语义相近的已有记忆、分组建议，以及要交给宿主提问工具的题面和选项。确认模式下必须调用宿主应用内提问工具（Cursor 用 AskQuestion，CodeBuddy 用 AskUserQuestion），禁止在对话里写草稿，禁止使用系统弹窗。一次性任务细节不要提交。正文必须自包含，脱离当前上下文也能读懂。',
+      '提交一条值得长期记住的记忆（用户的偏好、规范、项目事实，或对同一件事的第二次纠正）。本工具不直接落盘：它返回语义相近的已有记忆、分组建议，以及要交给宿主提问工具的题面和选项。确认模式下必须调用宿主应用内提问工具（Cursor 用 AskQuestion，CodeBuddy 与 WorkBuddy 用 AskUserQuestion），禁止在对话里写草稿，禁止使用系统弹窗。一次性任务细节不要提交。正文必须自包含，脱离当前上下文也能读懂。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -116,7 +116,7 @@ function hostQuestionGuide(prompt, options) {
   const optionLines = options.map((label) => `- ${label}`).join('\n')
   return [
     '下一步必须调用当前宿主的应用内提问工具，由它弹出确认。禁止在对话里写草稿或列表，禁止使用系统弹窗。',
-    'Cursor 用 AskQuestion，CodeBuddy 用 AskUserQuestion。题面和选项照抄，不要改写。',
+    'Cursor 用 AskQuestion，CodeBuddy 与 WorkBuddy 用 AskUserQuestion。题面和选项照抄，不要改写。',
     '',
     `题面：${prompt}`,
     '选项：',

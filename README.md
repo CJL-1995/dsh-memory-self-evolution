@@ -1,8 +1,8 @@
 # memory-self-evolution
 
-给 **Cursor** 和 **codebuddy** 用的自进化长期记忆。它把你在对话里表达过的偏好、规范和项目事实沉淀下来，靠本地向量模型按相关性召回，并让记忆随使用频率增长、随闲置时间衰减。
+给 **Cursor**、**codebuddy** 和 **WorkBuddy** 用的自进化长期记忆。它把你在对话里表达过的偏好、规范和项目事实沉淀下来，靠本地向量模型按相关性召回，并让记忆随使用频率增长、随闲置时间衰减。
 
-记忆存在 `~/.memory-self-evolution/`，两端共用同一份，不上云。
+记忆存在 `~/.memory-self-evolution/`，三端共用同一份，不上云。
 
 ## 它解决什么
 
@@ -21,7 +21,7 @@
 
 ## 安装
 
-需要 Node 20 以上。clone 到本机后执行这一行，依赖安装和两端注册会一起做完：
+需要 Node 20 以上。clone 到本机后执行这一行，依赖安装和三端注册会一起做完：
 
 ```bash
 git clone https://github.com/CJL-1995/memory-self-evolution.git && cd memory-self-evolution && npm install && npm run setup
@@ -39,16 +39,17 @@ npm install && npm run setup
 |---|---|---|
 | Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop` | `mcp.json` 的 `memory-self-evolution` |
 | codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
+| WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
 
 没有安装的客户端会跳过。已有的其他 hook 和 MCP 会保留。本插件已经注册过时，只更新 node 与仓库路径，不会追加第二条。hook 里必须写 node 的绝对路径，脚本会处理；手写相对路径时，hook 失败是静默的。
 
 记忆数据在 `~/.memory-self-evolution/`，按用户分开，不会随仓库分发。同事装完是空记忆库。首次召回或沉淀会下载向量模型（`bge-base-zh-v1.5`，约 98MB），之后离线。
 
-注册完成后重启 Cursor 和 codebuddy，MCP 才会加载。
+注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
 
 ## 怎么让它记住东西
 
-**让模型自己判断。** 你说「以后都要先跑测试再提交」，模型识别出这是跨轮次约定，调 `memory_propose` 拿到相近记忆和分组建议，再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 弹出 `AskUserQuestion`。这条路的好处是模型有完整对话上下文，判断力比任何外挂规则都强。
+**让模型自己判断。** 你说「以后都要先跑测试再提交」，模型识别出这是跨轮次约定，调 `memory_propose` 拿到相近记忆和分组建议，再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。这条路的好处是模型有完整对话上下文，判断力比任何外挂规则都强。
 
 **自己直接写。** 不想经过模型判断时：
 
@@ -68,7 +69,7 @@ node bin/memory.mjs rule add "<规则>"      # 直接新增规则
 node bin/memory.mjs review                # 待确认候选
 node bin/memory.mjs config                # 查看配置
 node bin/memory.mjs config recallTopK 15  # 改配置
-npm run setup                                 # 注册 Cursor / codebuddy
+npm run setup                                 # 注册 Cursor / codebuddy / WorkBuddy
 npm run verify                                # 跑召回回归测试
 ```
 
