@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // 给当前用户注册 Cursor、codebuddy 与 WorkBuddy 的 hook 和 MCP。
 // 已有其他 hook / MCP 会保留。本插件已注册时只更新 node 与仓库路径，不重复追加。
+//
+// 不带参数：交互安装。问通路和是否弹确认；旁路再问 baseUrl、apiKey、apiModel。
+// 直接回车默认旁路式、弹出确认。旁路三项输入 skip 则跳过，安装后自行配置。
+// sidepath / blocking：只改通路并重新注册，不再提问。
 // 用法：npm install && npm run setup
 
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -139,11 +144,166 @@ function migrateDataDir(home) {
   console.log(`已把 ${oldDir} 迁到 ${newDir}`)
 }
 
+function configFile(home) {
+  return path.join(home, '.memory-self-evolution', 'config.json')
+}
+
+function setMode(home, mode) {
+  const file = configFile(home)
+  const data = readJson(file, {})
+  data.sideJudge = mode === 'sidepath'
+  writeJson(file, data)
+  return data.sideJudge
+}
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+const lineQueue = []
+let lineWaiter = null
+rl.on('line', (line) => {
+  const text = String(line || '').trim()
+  if (!lineWaiter) {
+    lineQueue.push(text)
+    return
+  }
+  const resolve = lineWaiter
+  lineWaiter = null
+  resolve(text)
+})
+
+function ask(question) {
+  process.stdout.write(question)
+  if (lineQueue.length > 0) {
+    process.stdout.write('\n')
+    return Promise.resolve(lineQueue.shift())
+  }
+  return new Promise((resolve) => {
+    lineWaiter = resolve
+  })
+}
+
+async function askChoice(title, options) {
+  console.log(title)
+  for (const opt of options) console.log(`  ${opt.menu}`)
+  while (true) {
+    const answer = (await ask('请选择：')).toLowerCase()
+    if (!answer) return options[0].value
+    const hit = options.find((opt) => opt.aliases.includes(answer))
+    if (hit) return hit.value
+    console.log('输入序号。直接回车使用第一项。')
+  }
+}
+
+function isSkip(text) {
+  return text.toLowerCase() === 'skip'
+}
+
+async function askRequired(label) {
+  while (true) {
+    const answer = await ask(`${label}（输入 skip 跳过三项）：`)
+    if (isSkip(answer)) return null
+    if (answer) return answer
+    console.log(`${label} 必填，没有缺省值。`)
+  }
+}
+
+async function askSideApi() {
+  console.log('')
+  console.log('旁路式需要 baseUrl、apiKey、apiModel，三项都必填，没有缺省值。')
+  console.log('输入 skip 跳过。安装完成后自行写入：')
+  console.log('  ~/.memory-self-evolution/config.json 的 sideApiBase、sideApiModel')
+  console.log('  ~/.memory-self-evolution/side-secret.json 的 apiKey')
+  const baseUrl = await askRequired('baseUrl')
+  if (!baseUrl) return null
+  const apiKey = await askRequired('apiKey')
+  if (!apiKey) return null
+  const apiModel = await askRequired('apiModel')
+  if (!apiModel) return null
+  return { baseUrl, apiKey, apiModel }
+}
+
+function writeSideSecret(home, apiKey) {
+  const file = path.join(home, '.memory-self-evolution', 'side-secret.json')
+  const data = readJson(file, {})
+  data.apiKey = apiKey
+  writeJson(file, data)
+  fs.chmodSync(file, 0o600)
+}
+
+function applyChoices(home, choices) {
+  const file = configFile(home)
+  const data = readJson(file, {})
+  data.sideJudge = choices.sidepath
+  data.confirm = choices.confirm
+  if (choices.api) {
+    data.sideApiBase = choices.api.baseUrl
+    data.sideApiModel = choices.api.apiModel
+    writeSideSecret(home, choices.api.apiKey)
+  }
+  writeJson(file, data)
+}
+
+async function askInstallChoices() {
+  const sidepath = await askChoice('判别方式：', [
+    { value: true, menu: '1) 旁路式（直接回车）', aliases: ['1', '旁路', '旁路式', 'sidepath'] },
+    { value: false, menu: '2) 阻塞式', aliases: ['2', '阻塞', '阻塞式', 'blocking'] },
+  ])
+  const confirm = await askChoice('写盘方式：', [
+    { value: true, menu: '1) 弹出确认（直接回车）', aliases: ['1', '弹窗', '弹出', '确认', 'confirm'] },
+    { value: false, menu: '2) 自动追加', aliases: ['2', '自动', '自动追加', 'auto'] },
+  ])
+  const api = sidepath ? await askSideApi() : null
+  return { sidepath, confirm, api }
+}
+
+function registerAll(home) {
+  console.log(`Cursor：${registerCursor(home)}`)
+  console.log(`codebuddy：${registerClaudeStyle(home, '.codebuddy', 'codebuddy')}`)
+  console.log(`WorkBuddy：${registerClaudeStyle(home, '.workbuddy', 'workbuddy')}`)
+  console.log('记忆数据在 ~/.memory-self-evolution/，不会随仓库分发。重启客户端后 MCP 才会加载。')
+}
+
+const modeArg = process.argv[2]
+if (modeArg && modeArg !== 'sidepath' && modeArg !== 'blocking') {
+  console.error('用法：node tools/setup.mjs [sidepath|blocking]')
+  console.error('不带参数进入交互安装：选择旁路或阻塞、弹窗或自动追加；旁路再填 baseUrl、apiKey、apiModel。')
+  console.error('sidepath / blocking 只切换通路并重新注册，不再提问。')
+  process.exit(1)
+}
+
 const home = os.homedir()
 migrateDataDir(home)
 console.log(`node ${nodeBin}`)
 console.log(`仓库 ${repoRoot}`)
-console.log(`Cursor：${registerCursor(home)}`)
-console.log(`codebuddy：${registerClaudeStyle(home, '.codebuddy', 'codebuddy')}`)
-console.log(`WorkBuddy：${registerClaudeStyle(home, '.workbuddy', 'workbuddy')}`)
-console.log('记忆数据在 ~/.memory-self-evolution/，不会随仓库分发。重启客户端后 MCP 才会加载。')
+
+if (!modeArg && !process.stdin.isTTY) {
+  console.error('当前没有终端，跳过安装提问，只注册 hook 和 MCP。请在终端重新运行 npm run setup。')
+}
+
+let chosenSidepath = null
+if (modeArg) {
+  chosenSidepath = modeArg === 'sidepath'
+  const sideJudge = setMode(home, modeArg)
+  console.log(`通路已设为 ${modeArg}（sideJudge=${sideJudge}）`)
+} else if (process.stdin.isTTY) {
+  const choices = await askInstallChoices()
+  chosenSidepath = choices.sidepath
+  applyChoices(home, choices)
+  console.log(`通路：${choices.sidepath ? '旁路式' : '阻塞式'}`)
+  console.log(`写盘：${choices.confirm ? '弹出确认' : '自动追加'}`)
+  if (choices.sidepath && choices.api) {
+    console.log(`旁路 baseUrl：${choices.api.baseUrl}`)
+    console.log(`旁路 apiModel：${choices.api.apiModel}`)
+    console.log('apiKey 已写入 ~/.memory-self-evolution/side-secret.json')
+  } else if (choices.sidepath) {
+    console.log('已跳过旁路接口。安装后写入 config.json 的 sideApiBase、sideApiModel，以及 side-secret.json 的 apiKey。三项缺一，旁路不会写记忆。')
+  }
+}
+
+registerAll(home)
+rl.close()
+if (chosenSidepath === false) {
+  console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
+}
+if (chosenSidepath === true) {
+  console.log('重启后主模型看不到写记忆工具。沉淀由后台完成。')
+}

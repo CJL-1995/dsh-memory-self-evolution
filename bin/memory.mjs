@@ -22,6 +22,7 @@ import { renderRecall, renderSessionStart } from '../lib/core/render.mjs'
 import { collectCandidates, extractUserQueries, listCandidates } from '../lib/core/candidates.mjs'
 import { persistMemory, refreshDeprecated } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
+import { isUserNotice, maybeStartSideJob, modelNoticeForUserText, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
 
 // Cursor 用 camelCase 事件名 + prompt 字段，输出 additional_context。
 // codebuddy 与 WorkBuddy 都是 Claude Code 系：PascalCase 事件名，输出 hookSpecificOutput.additionalContext。
@@ -101,7 +102,7 @@ async function handleStop(payload) {
     console.error(`[memory] 读取 transcript 失败，跳过候选收集: ${e.message}`)
     return
   }
-  const queries = extractUserQueries(content)
+  const queries = extractUserQueries(content).filter((query) => !isUserNotice(query))
   if (queries.length === 0) return
   const r = await collectCandidates(queries, String(payload.session_id || ''))
   if (r.added || r.reinforced) {
@@ -123,15 +124,41 @@ async function runHook(argv) {
   const agent = detectAgent(argv, event)
   const kind = EVENT_KIND[event] || (argv.includes('--session-start') ? 'session-start' : 'prompt')
 
-  if (kind === 'stop') {
-    await handleStop(payload)
+  // 旁路模型自己的子进程也会触发 hook。这里直接退出，避免再启动一次判断。
+  if (process.env.MEMORY_SIDE_JUDGE === '1') {
     process.stdout.write('{}')
     return
   }
 
+  if (kind === 'stop') {
+    await handleStop(payload)
+    let followup = null
+    try {
+      const settings = await loadSettings()
+      if (settings.enabled && settings.sideJudge) {
+        followup = await takeSideFollowup(agent, payload, settings.sideWaitMs)
+      }
+    } catch (e) {
+      console.error(`[memory] 旁路确认失败，本轮正常结束: ${e.message}`)
+    }
+    process.stdout.write(JSON.stringify(followup || {}))
+    return
+  }
+
+  const promptText = String(payload.prompt || payload.user_prompt || '').trim()
+  if (kind === 'prompt') {
+    try {
+      await maybeStartSideJob({ agent, payload, promptText })
+    } catch (e) {
+      console.error(`[memory] 旁路启动失败，本轮不判断: ${e.message}`)
+    }
+  }
+
+  const recalled = kind === 'session-start' ? '' : await renderRecall([promptText])
+  const hidden = kind === 'prompt' ? modelNoticeForUserText(promptText) : ''
   const text = kind === 'session-start'
     ? await renderSessionStart()
-    : await renderRecall([String(payload.prompt || payload.user_prompt || '').trim()])
+    : [hidden, recalled].filter(Boolean).join('\n\n')
 
   process.stdout.write(JSON.stringify(wrapInjection(agent, event, text), null, 0))
 }
@@ -182,7 +209,7 @@ async function runRuleAdd(text) {
 async function runConfig(key, value) {
   if (!key) {
     const items = await describeSettings()
-    for (const i of items) console.log(`${i.key.padEnd(16)} = ${i.value}${i.isDefault ? '  (默认)' : ''}`)
+    for (const i of items) console.log(`${i.key.padEnd(22)} = ${i.value}${i.isDefault ? '  (默认)' : ''}`)
     return
   }
   if (value === undefined) {
@@ -224,6 +251,8 @@ try {
     await runConfig(argv[1], argv[2])
   } else if (cmd === 'review') {
     await runReview()
+  } else if (cmd === 'side-run') {
+    await runSideJob(argv[1])
   } else {
     console.error('用法：memory-self-evolution <hook|list|read|rule add|config|review> [参数]')
     process.exitCode = 1

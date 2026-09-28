@@ -33,7 +33,13 @@ git clone https://github.com/CJL-1995/memory-self-evolution.git && cd memory-sel
 npm install && npm run setup
 ```
 
-`npm run setup` 执行 `tools/setup.mjs`。它用当前 `node` 的绝对路径，把 hook 和 MCP 写进本机已安装的客户端：
+`npm run setup` 执行 `tools/setup.mjs`。在终端里会先问三件事，其余配置用默认值：
+
+1. 旁路式还是阻塞式。直接回车默认旁路式。
+2. 弹出确认还是自动追加。直接回车默认弹出确认。
+3. 选了旁路式，再填 `baseUrl`、`apiKey`、`apiModel`。这三项没有缺省值。输入 `skip` 跳过，安装后自己写入 `config.json` 的 `sideApiBase`、`sideApiModel`，以及 `side-secret.json` 的 `apiKey`。缺任何一项，旁路这一轮不写记忆。
+
+问完之后，用当前 `node` 的绝对路径，把 hook 和 MCP 写进本机已安装的客户端：
 
 | 客户端 | hook | MCP |
 |---|---|---|
@@ -49,7 +55,11 @@ npm install && npm run setup
 
 ## 怎么让它记住东西
 
-**让模型自己判断。** 你说「以后都要先跑测试再提交」，模型识别出这是跨轮次约定，调 `memory_propose` 拿到相近记忆和分组建议，再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。这条路的好处是模型有完整对话上下文，判断力比任何外挂规则都强。
+沉淀只走一条通路，由 `sideJudge` 决定。`confirm` 只决定写盘前弹不弹确认，两条通路都适用。
+
+**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。Cursor、codebuddy、WorkBuddy 的工具列表里没有 `memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 仍让主模型弹出确认，但主模型没有写工具，点选后不会落盘。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
+
+**阻塞（`sideJudge=false`）。** 旁路不启动。先运行 `node tools/setup.mjs blocking`，它把 `sideJudge` 写成 false，并把 MCP 装到本机已有的 Cursor、codebuddy、WorkBuddy。重启客户端后，主模型才能看到写记忆工具。你说「以后都要先跑测试再提交」，主模型调 `memory_propose` 拿到相近记忆和分组建议。`confirm=true` 时再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。`confirm=false` 时，分组信号明确就按判重提示直接落盘；信号缺失时仍弹确认。`memory_propose` 返回最相近的两条记忆和相似度，由主模型判断新建、强化或合并。切回旁路运行 `node tools/setup.mjs sidepath`，然后重启。
 
 **自己直接写。** 不想经过模型判断时：
 
@@ -57,7 +67,7 @@ npm install && npm run setup
 node bin/memory.mjs rule add "所有异常处理处都需要添加日志"
 ```
 
-**从历史会话里捞。** 每轮结束时 `stop` hook 会扫一遍对话，把带「以后」「记住」「别再」「一律」这类跨轮次标志的表达收进候选池并累计出现次数——跨会话反复出现的才值得沉淀，一次性噪音只会出现一次。用 `memory_review` 或 `node bin/memory.mjs review` 查看并确认。
+**从历史会话里捞。** 关键词候选池仍然保留：带「以后」「记住」「别再」「一律」的原话会累计出现次数。用 `memory_review` 或 `node bin/memory.mjs review` 查看并确认。
 
 ## 命令
 
@@ -69,7 +79,9 @@ node bin/memory.mjs rule add "<规则>"      # 直接新增规则
 node bin/memory.mjs review                # 待确认候选
 node bin/memory.mjs config                # 查看配置
 node bin/memory.mjs config recallTopK 15  # 改配置
-npm run setup                                 # 注册 Cursor / codebuddy / WorkBuddy
+npm run setup                                 # 交互安装并注册 Cursor / codebuddy / WorkBuddy
+node tools/setup.mjs sidepath                 # 切到旁路，并安装 MCP
+node tools/setup.mjs blocking                 # 切到阻塞，并安装带写工具的 MCP
 npm run verify                                # 跑召回回归测试
 ```
 
@@ -82,11 +94,12 @@ npm run verify                                # 跑召回回归测试
 | `memory_propose` | 提交待沉淀内容，返回相近记忆与分组建议，**不落盘** |
 | `memory_persist` | 正式写入 |
 | `memory_reinforce` | 强化已有记忆（置信度 +0.1） |
+| `memory_merge` | 用合并后的正文替换已有记忆，重新向量化，并强化一次 |
 | `memory_review` | 列出待确认候选 |
 | `memory_discard` | 丢弃候选 |
 | `memory_config` | 查看或修改配置 |
 
-`memory_propose` 故意不落盘：它先把语义相近的已有记忆列出来，让模型判断该「强化已有」还是「新建」，避免记忆库堆满同义重复。
+`memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge` 只在阻塞模式出现在工具列表里。旁路模式客户端看不到它们。`memory_propose` 不落盘：它返回最相近的两条记忆和相似度，让主模型判断新建、强化或合并。相似度越高越应当强化，而不是新建。
 
 ## 配置
 
@@ -96,9 +109,15 @@ npm run verify                                # 跑召回回归测试
 |---|---|---|
 | `enabled` | `true` | 关掉后不注入任何记忆 |
 | `recallTopK` | `10` | 每轮召回条数**上限**（不是配额，不相关时一条都不注入） |
-| `recallMinScore` | `0.22` | 相关度下限，`-1` 关闭 |
+| `recallMinScore` | `0.22` | 每条召回的绝对下限，`-1` 关闭。实际保留线是 `max(该值, top1 × 0.6)`，再截到 `recallTopK` |
 | `recallMinMargin` | `-1` | 对第二名的领先幅度下限，默认关闭 |
-| `confirm` | `true` | 沉淀前是否需要确认 |
+| `confirm` | `true` | 写盘前是否弹确认。旁路和阻塞都适用。关掉后：旁路直接写入，`stop` 只展示结果；阻塞模式在分组明确时直接落盘，信号缺失时仍弹确认 |
+| `sideJudge` | `true` | `true` 为旁路，`false` 为阻塞。两条通路互斥。不能用 `memory_config` 改，只能运行 `node tools/setup.mjs sidepath` 或 `node tools/setup.mjs blocking`，然后重启客户端 |
+| `sideWaitMs` | `12000` | 回答结束后，`stop` 等待旁路结果的毫秒数 |
+| `sideApiBase` | 无 | 旁路接口根地址，必填，没有缺省值。安装时填写，或之后写入本文件 |
+| `sideApiModel` | 无 | 旁路模型名，必填，没有缺省值 |
+
+密钥不在这张表里。`~/.memory-self-evolution/side-secret.json` 的 `apiKey` 同样必填，权限 600。
 
 ## 实测数据
 

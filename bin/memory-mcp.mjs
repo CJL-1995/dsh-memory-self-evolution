@@ -6,7 +6,7 @@
 import { GROUPS, READ_LIMIT } from '../lib/core/config.mjs'
 import { fmtConfidence, readAllGroups, readAllMemories, readGroup } from '../lib/core/store.mjs'
 import { recall } from '../lib/core/recall.mjs'
-import { inferGroup, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
+import { inferGroup, mergeMemory, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
 import { dropCandidate, listCandidates } from '../lib/core/candidates.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
 
@@ -31,7 +31,7 @@ const TOOLS = [
   {
     name: 'memory_propose',
     description:
-      '提交一条值得长期记住的记忆（用户的偏好、规范、项目事实，或对同一件事的第二次纠正）。本工具不直接落盘：它返回语义相近的已有记忆、分组建议，以及要交给宿主提问工具的题面和选项。确认模式下必须调用宿主应用内提问工具（Cursor 用 AskQuestion，CodeBuddy 与 WorkBuddy 用 AskUserQuestion），禁止在对话里写草稿，禁止使用系统弹窗。一次性任务细节不要提交。正文必须自包含，脱离当前上下文也能读懂。',
+      '提交一条值得长期记住的记忆（用户的偏好、规范、项目事实，或对同一件事的第二次纠正）。仅阻塞模式使用，不直接落盘。返回最相近的两条记忆、相似度，以及新建、强化或合并的判重提示。相似度越高越应当强化，而不是新建。确认模式下先按提示选定动作，再用宿主提问工具确认后落盘。一次性任务细节不要提交。正文必须自包含。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -72,6 +72,19 @@ const TOOLS = [
     },
   },
   {
+    name: 'memory_merge',
+    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1、观测次数 +1）。仅在用户确认「合并」后调用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '要改写的已有记忆 id' },
+        text: { type: 'string', description: '合并后的自包含中文正文，写当前生效的结论' },
+      },
+      required: ['id', 'text'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'memory_review',
     description: '列出从历史会话累积的待确认候选记忆（按出现次数降序）。用户说要处理候选、或会话开始提示有待确认候选时调用。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -91,7 +104,7 @@ const TOOLS = [
   },
   {
     name: 'memory_config',
-    description: '查看或修改记忆系统配置。不传参数即查看全部；传 key 与 value 则修改。可调项含 recallTopK（每轮召回条数上限）、recallMinScore / recallMinMargin（相关性门控，-1 为关闭）、confirm（沉淀是否需确认）、enabled。',
+    description: '查看或修改记忆系统配置。不传参数即查看全部；传 key 与 value 则修改。可调项含 recallTopK（每轮召回条数上限）、recallMinScore（每条召回的绝对下限，与 top1×0.6 取更高者）/ recallMinMargin（领先幅度门控，-1 为关闭）、confirm（写盘前是否弹确认，旁路和阻塞都适用）、enabled、sideApiBase、sideApiModel。sideApiBase 和 sideApiModel 没有缺省值，旁路必填。旁路 API 密钥不在这里，放在 side-secret.json 的 apiKey，同样必填。sideJudge 不能在这里改，切换通路用 node tools/setup.mjs sidepath 或 node tools/setup.mjs blocking。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -105,8 +118,23 @@ const TOOLS = [
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] })
 
-// 与 memoryPropose 里的判重说明一致：0.44 以上视为同一条。
-const SAME_MEMORY_SCORE = 0.44
+// 旁路不向客户端暴露这些写工具。阻塞式由 tools/setup.mjs blocking 装上 MCP 后才会出现。
+const WRITE_TOOLS = new Set(['memory_propose', 'memory_persist', 'memory_reinforce', 'memory_merge'])
+
+function sidepathWriteRefusal() {
+  return text('当前是旁路模式，没有写记忆工具。沉淀由后台完成。切换到阻塞式请运行 node tools/setup.mjs blocking，然后重启客户端。')
+}
+
+const PROPOSE_TOP_K = 2
+
+const DEDUP_HINT = [
+  '判重由你完成。相似度只说明检索有多近，不代替判断。',
+  '- 相似度越高，越应当强化已有记忆，而不是新建一条近义重复。',
+  '- 先看是不是同一件事：对象相同、结论指向同一规则域才算。平台、语言不同仍是同一件事，不要因此新建。',
+  '- 同一件事，只是换措辞，或新陈述是已有规则已经覆盖的子集、没有新约束：调用 memory_reinforce，id 用上面列出的 id，正文不动。不要把更宽的旧规则改窄。',
+  '- 同一件事，但有新事实、取值冲突、适用范围扩大，或明确要求旧规则以后只在更小的范围生效：调用 memory_merge。id 必须用上面列出的 id，不要编造。text 写合并后的当前结论，自包含；冲突以本次陈述为准，不冲突的旧信息保留；不要写「原先怎样、现在改成怎样」。',
+  '- 拿不准就新建，不要错误合并。',
+].join('\n')
 
 function otherGroup(group) {
   return group === 'rule' ? 'project' : 'rule'
@@ -122,7 +150,7 @@ function hostQuestionGuide(prompt, options) {
     '选项：',
     optionLines,
     '',
-    '用户点选之后再调用 memory_persist 或 memory_reinforce。选「不落成」则不要写盘。',
+    '用户点选落成之后调用 memory_persist。选「不落成」则不要写盘。',
   ].join('\n')
 }
 
@@ -151,70 +179,91 @@ async function memoryRead(args) {
   return text(`${head}\n${body}`)
 }
 
+async function listTools() {
+  const settings = await loadSettings()
+  if (!settings.sideJudge) return TOOLS
+  return TOOLS.filter((tool) => !WRITE_TOOLS.has(tool.name))
+}
+
 async function memoryPropose(args) {
+  const settings = await loadSettings()
+  if (settings.sideJudge) return sidepathWriteRefusal()
+
   const content = String(args.text || '').trim()
   if (!content) return text('参数 text 不能为空')
-
-  const settings = await loadSettings()
   const all = await readAllMemories()
-  // 关掉门控拿原始排序：这里要的是「最像的几条」供模型判重，不是「够不够相关」。
-  // 判重与召回用的是同一份纯正文向量，两侧对称，分数可直接按阈值解读。
+  // 关掉门控拿最相近的两条。分数只交给模型参考，不在这里决定新建、强化或合并。
   let similar = []
   try {
-    similar = await recall([content], all, { topK: 5, gate: false })
+    similar = await recall([content], all, { topK: PROPOSE_TOP_K, gate: false })
   } catch (e) {
     console.error(`[memory] 判重召回失败，跳过相近记忆提示: ${e.message}`)
   }
 
   const lines = [`待沉淀内容：${content}`]
   if (similar.length > 0) {
-    lines.push('', '语义相近的已有记忆（若表达的是同一条规则，请调 memory_reinforce 而非新建）：')
-    for (const s of similar) {
-      lines.push(`- [${s.memory.category}] ${s.memory.text}（相似度 ${s.score.toFixed(2)}，id ${s.memory.id}）`)
-    }
-    // 实测真重复的相似度不低于 0.44、真新记忆不高于 0.34，中间有明确空隙
-    lines.push('', '参考：相似度 0.44 以上大概率是同一条，0.34 以下大概率是新记忆，中间需要你自己判断。')
+    lines.push('', `最相近的 ${similar.length} 条已有记忆（合并或强化时 id 用这里的值）：`)
+    similar.forEach((s, i) => {
+      lines.push(`${i + 1}. id：${s.memory.id}`)
+      lines.push(`   相似度：${s.score.toFixed(2)}`)
+      lines.push(`   分组：${s.memory.category}`)
+      lines.push(`   正文：${s.memory.text}`)
+    })
+    lines.push('', DEDUP_HINT)
   } else {
-    lines.push('', '没有语义相近的已有记忆。')
+    lines.push('', '没有语义相近的已有记忆。按新建处理，调用 memory_persist。')
   }
 
   const guess = inferGroup(content)
   const groupNote = guess.confident ? '正文的语气信号明确' : '正文没有明确信号，这是保守默认值'
   lines.push('', `分组建议：${guess.group}（${groupNote}）`)
 
-  const top = similar[0]
-  const duplicate = top && top.score >= SAME_MEMORY_SCORE ? top : null
-  if (!settings.confirm && guess.confident && !duplicate) {
-    lines.push('当前为免确认模式且分组信号明确：可直接调用 memory_persist 或 memory_reinforce。')
+  if (!settings.confirm && guess.confident) {
+    lines.push('', similar.length > 0
+      ? '当前不需要确认，且分组信号明确：按上面的规则直接调用。memory_reinforce 和 memory_merge 的 id 用上面列出的 id。'
+      : '当前不需要确认，且分组信号明确：直接调用 memory_persist。')
     return text(lines.join('\n'))
   }
 
-  const alt = otherGroup(guess.group)
-  if (duplicate) {
+  if (similar.length === 0) {
+    const alt = otherGroup(guess.group)
     lines.push('', hostQuestionGuide(
-      `检测到一条记忆，与已有条目很像（id ${duplicate.memory.id}）。是否落成记忆。\n正文：${content}\n推荐：强化已有记忆`,
+      `检测到一条记忆，建议落成 ${guess.group}。是否落成记忆。\n正文：${content}\n推荐标签：${guess.group}`,
       [
-        `强化已有记忆 ${duplicate.memory.id}`,
-        `仍新建，使用推荐标签 ${guess.group}`,
-        `仍新建，把标签改为 ${alt}`,
+        `落成，使用推荐标签 ${guess.group}`,
+        `落成，把标签改为 ${alt}`,
         '不落成',
       ],
     ))
     return text(lines.join('\n'))
   }
 
-  lines.push('', hostQuestionGuide(
-    `检测到一条记忆，建议落成 ${guess.group}。是否落成记忆。\n正文：${content}\n推荐标签：${guess.group}`,
-    [
-      `落成，使用推荐标签 ${guess.group}`,
-      `落成，把标签改为 ${alt}`,
-      '不落成',
-    ],
-  ))
+  lines.push('', blockingDedupConfirm(content, guess, similar))
   return text(lines.join('\n'))
 }
 
+function blockingDedupConfirm(content, guess, similar) {
+  const alt = otherGroup(guess.group)
+  const idLines = similar.map((s) => `- ${s.memory.id}`).join('\n')
+  return [
+    '先按判重规则选定新建、强化或合并，再用宿主提问工具弹出确认。禁止在对话里写草稿，禁止使用系统弹窗。',
+    'Cursor 用 AskQuestion，CodeBuddy 与 WorkBuddy 用 AskUserQuestion。',
+    '',
+    `正文：${content}`,
+    `推荐标签：${guess.group}`,
+    '可用的已有记忆 id：',
+    idLines,
+    '按选定的动作出题，不要把三种动作塞进同一题。id 只能从上面选：',
+    '- 强化：选项为「强化已有记忆」加上选中的 id，以及「不落成」。点选强化后调用 memory_reinforce，id 用选中的 id。',
+    '- 合并：题面写上合并后正文。选项为「合并进已有记忆」加上选中的 id，以及「不落成」。点选合并后调用 memory_merge，id 用选中的 id，text 用合并正文。',
+    `- 新建：选项为「落成，使用推荐标签 ${guess.group}」「落成，把标签改为 ${alt}」「不落成」。点选落成后调用 memory_persist。`,
+    '选「不落成」则不要写盘。',
+  ].join('\n')
+}
+
 async function memoryPersist(args) {
+  const settings = await loadSettings()
+  if (settings.sideJudge) return sidepathWriteRefusal()
   const mem = await persistMemory({
     text: args.text,
     category: args.category,
@@ -226,19 +275,30 @@ async function memoryPersist(args) {
 }
 
 async function memoryReinforce(args) {
+  const settings = await loadSettings()
+  if (settings.sideJudge) return sidepathWriteRefusal()
   const mem = await reinforceMemory(String(args.id || '').trim())
   return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次）`)
 }
 
+async function memoryMerge(args) {
+  const settings = await loadSettings()
+  if (settings.sideJudge) return sidepathWriteRefusal()
+  const mem = await mergeMemory(String(args.id || '').trim(), args.text)
+  return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次，id ${mem.id}）`)
+}
+
 async function memoryReview() {
+  const settings = await loadSettings()
   const items = await listCandidates()
   if (items.length === 0) return text('没有待确认的候选记忆')
   const body = items
     .map((c, i) => `${i + 1}. ${c.text}\n   出现 ${c.observations} 次，最近 ${String(c.lastSeen).slice(0, 10)}，指纹 ${c.fingerprint}`)
     .join('\n')
-  return text(
-    `${items.length} 条待确认候选（按出现次数降序）：\n${body}\n\n请整理成编号列表询问用户：沉淀哪些、归到哪个标签、哪些丢弃。确认后对沉淀项调 memory_persist，对丢弃项调 memory_discard。`
-  )
+  const tail = settings.sideJudge
+    ? '旁路模式没有写记忆工具，候选不能从这里落成。丢弃用 memory_discard。'
+    : '请整理成编号列表询问用户：沉淀哪些、归到哪个标签、哪些丢弃。确认后对沉淀项调 memory_persist，对丢弃项调 memory_discard。'
+  return text(`${items.length} 条待确认候选（按出现次数降序）：\n${body}\n\n${tail}`)
 }
 
 async function memoryDiscard(args) {
@@ -252,6 +312,9 @@ async function memoryConfig(args) {
     const body = items.map((i) => `- ${i.key} = ${i.value}${i.isDefault ? '（默认）' : ''}`).join('\n')
     return text(`当前配置：\n${body}`)
   }
+  if (args.key === 'sideJudge') {
+    return text('sideJudge 不能在这里改。切换通路请在仓库里运行 node tools/setup.mjs sidepath 或 node tools/setup.mjs blocking，然后重启 Cursor、codebuddy、WorkBuddy。')
+  }
   if (args.value === undefined) return text('修改配置需要同时提供 key 与 value')
   const r = await updateSetting(args.key, args.value)
   return text(r.message)
@@ -263,6 +326,7 @@ const HANDLERS = {
   memory_propose: memoryPropose,
   memory_persist: memoryPersist,
   memory_reinforce: memoryReinforce,
+  memory_merge: memoryMerge,
   memory_review: memoryReview,
   memory_discard: memoryDiscard,
   memory_config: memoryConfig,
@@ -281,7 +345,7 @@ async function handle(req) {
       serverInfo: { name: 'memory-self-evolution', version: '0.2.0' },
     }
   }
-  if (method === 'tools/list') return { tools: TOOLS }
+  if (method === 'tools/list') return { tools: await listTools() }
   if (method === 'tools/call') {
     const name = params && params.name
     const handler = HANDLERS[name]
