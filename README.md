@@ -21,25 +21,24 @@
 
 ## 安装
 
-需要 Node 20 以上。clone 到本机后执行这一行，依赖安装和三端注册会一起做完：
+需要 Node 20 以上。在终端里执行：
 
 ```bash
-git clone https://github.com/CJL-1995/memory-self-evolution.git && cd memory-self-evolution && npm install && npm run setup
+git clone https://github.com/CJL-1995/memory-self-evolution.git
+cd memory-self-evolution
+npm install
+npm run setup
 ```
 
-已经 clone 过、只需要重新注册时：
+已经 clone 过时，在仓库目录重新执行 `npm install && npm run setup`。`npm run setup` 必须在终端里跑，它会按下面的顺序做完。
 
-```bash
-npm install && npm run setup
-```
-
-`npm run setup` 执行 `tools/setup.mjs`。在终端里会先问三件事，其余配置用默认值：
-
-1. 旁路式还是阻塞式。直接回车默认旁路式。
-2. 弹出确认还是自动追加。直接回车默认弹出确认。
-3. 选了旁路式，再填 `baseUrl`、`apiKey`、`apiModel`。这三项没有缺省值。输入 `skip` 跳过，安装后自己写入 `config.json` 的 `sideApiBase`、`sideApiModel`，以及 `side-secret.json` 的 `apiKey`。缺任何一项，旁路这一轮不写记忆。
-
-问完之后，用当前 `node` 的绝对路径，把 hook 和 MCP 写进本机已安装的客户端：
+1. 只问三件事，其余配置用默认值。
+   - 旁路式还是阻塞式。直接回车默认旁路式。
+   - 弹出确认还是自动追加。直接回车默认弹出确认。
+   - 选了旁路式，再填 `baseUrl`、`apiKey`、`apiModel`。这三项没有缺省值。输入 `skip` 跳过，安装后自己写入 `~/.memory-self-evolution/config.json` 的 `sideApiBase`、`sideApiModel`，以及 `side-secret.json` 的 `apiKey`。缺任何一项，旁路这一轮不写记忆。
+2. 把选择写进 `~/.memory-self-evolution/`。目录不存在时会建出来。这里只落配置和密钥，记忆文件要等第一次写入才出现。同事装完是空记忆库。
+3. 下载向量模型 `bge-base-zh-v1.5`（约 98MB）到本仓库的 `node_modules/@huggingface/transformers/.cache/`。缓存已在则直接复用。下载失败时安装中止，后面的 hook 和 MCP 不会注册。
+4. 用当前 `node` 的绝对路径，把 hook 和 MCP 写进本机已经安装的客户端。没装的客户端跳过。已有的其他 hook 和 MCP 保留。本插件注册过时，只更新 node 与仓库路径，不会追加第二条。
 
 | 客户端 | hook | MCP |
 |---|---|---|
@@ -47,11 +46,19 @@ npm install && npm run setup
 | codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
 | WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
 
-没有安装的客户端会跳过。已有的其他 hook 和 MCP 会保留。本插件已经注册过时，只更新 node 与仓库路径，不会追加第二条。hook 里必须写 node 的绝对路径，脚本会处理；手写相对路径时，hook 失败是静默的。
+三端写入的是同一个 MCP 进程。旁路还是阻塞不改变装上去的程序，只改变 `config.json` 里的 `sideJudge`。进程启动后读这个值：旁路不列出 `memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge`，阻塞才列出。hook 两组模式都装，和通路无关。
 
-记忆数据在 `~/.memory-self-evolution/`，按用户分开，不会随仓库分发。同事装完是空记忆库。首次召回或沉淀会下载向量模型（`bge-base-zh-v1.5`，约 98MB），之后离线。
+注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。之后只改通路时运行 `node tools/setup.mjs sidepath` 或 `node tools/setup.mjs blocking`，不再提问，同样会先确认模型缓存再重新注册。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
 
-注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
+## 卸载
+
+```bash
+npm run uninstall
+```
+
+插件仓库保留。它会删掉安装时落下的向量模型、三端里本插件的 hook，以及 `mcp.json` 里的 `memory-self-evolution`。其他 hook 和 MCP 不动。
+
+`~/.memory-self-evolution/` 目录保留。`rule.jsonl`、`project.jsonl`、`memories.md`、`embeddings.jsonl`、`candidates.json`、`project-memory` 保留。`config.json`、`side-secret.json` 和 `side/` 删除。重新安装时再跑 `npm run setup`，模型会重新下载，配置会重新写。卸完后重启三个客户端，MCP 才会从已经打开的会话里消失。
 
 ## 怎么让它记住东西
 
@@ -80,8 +87,9 @@ node bin/memory.mjs review                # 待确认候选
 node bin/memory.mjs config                # 查看配置
 node bin/memory.mjs config recallTopK 15  # 改配置
 npm run setup                                 # 交互安装并注册 Cursor / codebuddy / WorkBuddy
-node tools/setup.mjs sidepath                 # 切到旁路，并安装 MCP
-node tools/setup.mjs blocking                 # 切到阻塞，并安装带写工具的 MCP
+npm run uninstall                             # 卸掉模型、hook、MCP 和配置，保留记忆与插件仓库
+node tools/setup.mjs sidepath                 # 切到旁路，确认模型缓存并重新注册
+node tools/setup.mjs blocking                 # 切到阻塞，确认模型缓存并重新注册
 npm run verify                                # 跑召回回归测试
 ```
 

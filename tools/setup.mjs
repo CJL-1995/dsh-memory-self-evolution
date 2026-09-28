@@ -3,6 +3,7 @@
 // 已有其他 hook / MCP 会保留。本插件已注册时只更新 node 与仓库路径，不重复追加。
 //
 // 不带参数：交互安装。问通路和是否弹确认；旁路再问 baseUrl、apiKey、apiModel。
+// 注册 hook 之前会下载向量模型 bge-base-zh-v1.5。缓存已在则直接复用。下载失败则中止安装。
 // 直接回车默认旁路式、弹出确认。旁路三项输入 skip 则跳过，安装后自行配置。
 // sidepath / blocking：只改通路并重新注册，不再提问。
 // 用法：npm install && npm run setup
@@ -12,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
+import { downloadModel } from '../lib/embedding.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const nodeBin = process.execPath
@@ -255,6 +257,17 @@ async function askInstallChoices() {
   return { sidepath, confirm, api }
 }
 
+async function ensureVectorModel() {
+  console.log('正在准备向量模型 bge-base-zh-v1.5（约 98MB，已有缓存则直接复用）…')
+  try {
+    await downloadModel()
+  } catch (error) {
+    console.error(`向量模型下载失败，安装中止，hook 与 MCP 未继续注册。原因：${error.message}`)
+    process.exit(1)
+  }
+  console.log('向量模型已就绪')
+}
+
 function registerAll(home) {
   console.log(`Cursor：${registerCursor(home)}`)
   console.log(`codebuddy：${registerClaudeStyle(home, '.codebuddy', 'codebuddy')}`)
@@ -276,7 +289,7 @@ console.log(`node ${nodeBin}`)
 console.log(`仓库 ${repoRoot}`)
 
 if (!modeArg && !process.stdin.isTTY) {
-  console.error('当前没有终端，跳过安装提问，只注册 hook 和 MCP。请在终端重新运行 npm run setup。')
+  console.error('当前没有终端，跳过安装提问。仍会下载向量模型并注册 hook 和 MCP。要选择通路和确认方式，请在终端重新运行 npm run setup。')
 }
 
 let chosenSidepath = null
@@ -299,8 +312,9 @@ if (modeArg) {
   }
 }
 
-registerAll(home)
 rl.close()
+await ensureVectorModel()
+registerAll(home)
 if (chosenSidepath === false) {
   console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
 }

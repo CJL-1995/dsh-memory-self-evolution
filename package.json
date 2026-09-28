@@ -18,6 +18,7 @@
   },
   "scripts": {
     "setup": "node tools/setup.mjs",
+    "uninstall": "node tools/uninstall.mjs",
     "verify": "node tools/verify-gate.mjs",
     "rebuild-index": "node tools/rebuild-index.mjs"
   },
