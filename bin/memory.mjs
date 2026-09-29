@@ -20,7 +20,7 @@ import { GROUPS, READ_LIMIT } from '../lib/core/config.mjs'
 import { fmtConfidence, readAllGroups, readGroup } from '../lib/core/store.mjs'
 import { renderRecall, renderSessionStart } from '../lib/core/render.mjs'
 import { collectCandidates, extractUserQueries, listCandidates } from '../lib/core/candidates.mjs'
-import { persistMemory, refreshDeprecated } from '../lib/core/writer.mjs'
+import { persistMemory } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
 import { CONFIRM_MARK, hiddenNoticeForPrompt, isUserNotice, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
 
@@ -83,14 +83,6 @@ function wrapInjection(agent, event, text) {
 async function handleStop(payload) {
   const settings = await loadSettings()
   if (!settings.enabled) return
-
-  // 顺手刷新废弃标记：置信度衰减是时间驱动的，需要有个定期触发点。
-  try {
-    const changed = await refreshDeprecated()
-    if (changed > 0) console.error(`[memory] 刷新废弃标记，${changed} 条状态变更`)
-  } catch (e) {
-    console.error(`[memory] 刷新废弃标记失败: ${e.message}`)
-  }
 
   const file = String(payload.transcript_path || '').trim()
   if (!file) {

@@ -18,7 +18,7 @@ test('所有新建入口的底层初始值固定 0.5，不接受外部置信度'
     assert.equal('observations' in mem, false)
   }
   assert.ok((await h.records()).every(mem => mem.confidence === 0.5 && !('observations' in mem)))
-  assert.equal(await writer.refreshDeprecated(), 0)
+  assert.equal(await writer.decayMemoriesOncePerDay(), 0)
   assert.ok((await h.records()).every(mem => !mem.deprecated))
 })
 
@@ -165,7 +165,7 @@ test('同进程并发的新建、强化、合并、召回与废弃刷新不丢�
     ...Array.from({ length: 8 }, () => writer.rewardRecalledMemories(['a'])),
     writer.mergeMemory('a', '合并后的正文'),
     writer.persistMemory({ text: '新规则', category: 'rule' }),
-    writer.refreshDeprecated(),
+    writer.decayMemoriesOncePerDay(),
   ])
   const rules = await h.records()
   assert.equal(rules.length, 2)
@@ -183,15 +183,18 @@ test('跨进程并发加分不丢失', async t => {
   assert.equal((await h.records())[0].confidence, 1.7)
 })
 
-test('新记忆未衰减时有效，闲置满 30 天后才废弃', async t => {
+test('新记忆未衰减时有效，满 30 天实际扣分，低于 0.4 才废弃', async t => {
   const h = await createMemoryHarness(t)
-  await h.seed('rule', [memory('new'), memory('old', { lastSeen: new Date(Date.now() - 31 * 86400000).toISOString() })])
+  await h.seed('rule', [memory('new'), memory('old', { confidence: 0.4, lastSeen: new Date(Date.now() - 31 * 86400000).toISOString() })])
   const writer = await h.load('lib/core/writer.mjs')
-  assert.equal(await writer.refreshDeprecated(), 1)
+  assert.equal(await writer.decayMemoriesOncePerDay(), 1)
   const rules = new Map((await h.records()).map(mem => [mem.id, mem]))
+  assert.equal(rules.get('new').confidence, 0.5)
   assert.equal(rules.get('new').deprecated, false)
+  assert.equal(rules.get('old').confidence, 0.35)
   assert.equal(rules.get('old').deprecated, true)
-  assert.equal((await writer.reinforceMemory('old')).deprecated, false)
+  assert.equal((await writer.reinforceMemory('old')).confidence, 0.45)
+  assert.equal((await h.records()).find(mem => mem.id === 'old').deprecated, false)
 })
 
 test('候选池的出现次数仍保留，不再作为正式记忆强度', async t => {
@@ -247,11 +250,12 @@ test('CLI 直接新建同样固定 0.5', async t => {
   assert.equal((await h.records())[0].confidence, 0.5)
 })
 
-test('有效置信度恰好为 0.5 时不因浮点误差废弃', async t => {
+test('实际置信度恰好减至 0.4 时不因浮点误差废弃', async t => {
   const h = await createMemoryHarness(t)
-  await h.seed('rule', [memory('boundary', { confidence: 0.7, lastSeen: new Date(Date.now() - 121 * 86400000).toISOString() })])
+  await h.seed('rule', [memory('boundary', { confidence: 0.45, lastSeen: new Date(Date.now() - 31 * 86400000).toISOString() })])
   const writer = await h.load('lib/core/writer.mjs')
-  assert.equal(await writer.refreshDeprecated(), 0)
+  assert.equal(await writer.decayMemoriesOncePerDay(), 1)
+  assert.equal((await h.records())[0].confidence, 0.4)
   assert.equal((await h.records())[0].deprecated, false)
 })
 

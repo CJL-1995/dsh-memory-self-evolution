@@ -13,7 +13,12 @@ export async function createMemoryHarness(t, options = {}) {
   const root = path.join(home, '.memory-self-evolution')
   await fsp.mkdir(root, { recursive: true })
   const errors = []
-  const state = { hits: [], recallError: null, writeError: false, vectorRefreshes: 0 }
+  const state = { hits: [], recallError: null, writeError: false, failRenameTo: '', failRead: '', reads: new Map(), embeddedTexts: [], vectorRefreshes: 0 }
+  const clock = { now: options.now ? new Date(options.now).getTime() : null }
+  class TestDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock.now ?? Date.now()])) }
+    static now() { return clock.now ?? Date.now() }
+  }
   const settings = { enabled: true, sideJudge: true, confirm: true, recallTopK: 10, recallMinScore: 0.22, recallMinMargin: -1 }
   const stdin = new EventEmitter()
   stdin.setEncoding = () => {}
@@ -21,7 +26,7 @@ export async function createMemoryHarness(t, options = {}) {
   const context = vm.createContext({
     console: { error: (...args) => errors.push(args.join(' ')), log: (...args) => output.push(args.join(' ')) },
     process: { pid: process.pid, kill: process.kill.bind(process), env: {}, argv: ['node', 'memory.mjs', ...(options.argv || [])], stdin, stdout: { write: value => output.push(value) } },
-    URL, AbortSignal, setTimeout, clearTimeout,
+    Date: TestDate, URL, AbortSignal, setTimeout, clearTimeout,
     fetch: () => { throw new Error('测试禁止网络请求') },
   })
   const cache = new Map()
@@ -39,8 +44,13 @@ export async function createMemoryHarness(t, options = {}) {
     } else if (identifier === 'node:fs/promises') {
       const safeFs = {
         ...fsp,
+        readFile: async (file, ...args) => {
+          state.reads.set(String(file), (state.reads.get(String(file)) || 0) + 1)
+          if (path.basename(file) === state.failRead) throw Object.assign(new Error('模拟读取失败'), { code: 'EACCES' })
+          return fsp.readFile(file, ...args)
+        },
         rename: async (from, to) => {
-          if (state.writeError && /\/(rule|project)\.jsonl$/.test(to)) throw new Error('模拟记忆写入失败')
+          if ((state.writeError && /\/(rule|project)\.jsonl$/.test(to)) || path.basename(to) === state.failRenameTo) throw new Error('模拟记忆写入失败')
           return fsp.rename(from, to)
         },
       }
@@ -62,7 +72,10 @@ export async function createMemoryHarness(t, options = {}) {
     } else if (identifier === path.join(repo, 'lib/embedding.js')) {
       mod = synthetic(identifier, {
         EMBED_VERSION: 4, docText: mem => mem.text,
-        embed: async texts => texts.map(text => [text === '不相关' ? 0.1 : 1]),
+        embed: async texts => {
+          state.embeddedTexts.push(...texts)
+          return texts.map(text => [text === '不相关' ? 0.1 : 1])
+        },
         centroid: () => [0], centerTo: value => value, cosine: (_, value) => value[0],
       })
     } else {
@@ -89,7 +102,7 @@ export async function createMemoryHarness(t, options = {}) {
   async function records(group = 'rule') {
     return (await fsp.readFile(path.join(root, `${group}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   }
-  return { home, root, errors, output, state, settings, stdin, load, seed, records }
+  return { home, root, errors, output, state, settings, clock, stdin, load, seed, records }
 }
 
 export function memory(id, extra = {}) {
