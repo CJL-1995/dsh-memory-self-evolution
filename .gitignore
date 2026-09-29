@@ -8,6 +8,9 @@ node_modules
 # 运行时记忆数据
 .memory-self-evolution/
 
+# 本地交接文档，不进入仓库
+HANDOFF.md
+
 # 日志
 *.log
 

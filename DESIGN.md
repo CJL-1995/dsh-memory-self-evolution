@@ -338,7 +338,7 @@ V8 单字符串上限约 5.4 亿字符，按每条 15.4KB 算，**到大约 3.4 
 |---|---|
 | `tests/confidence.test.mjs` | 22 项隔离功能回归：置信度、工具入口、模式、并发和兼容 |
 | `tests/decay.test.mjs` | 21 项每日衰减回归：实际扣分、时间戳、跨会话去重、失败重试与三端 hook；`npm test` 共运行 43 项 |
-| `tools/verify-gate.mjs` | 召回与门控的回归基线，`npm run verify`；使用当前用户记忆池，可能补建索引 |
+| `tools/verify-gate.mjs` | 召回与门控的回归基线，`npm run verify`；使用当前用户记忆池和本机 `verify-cases.json` 用例，可能补建索引 |
 | `tools/rebuild-index.mjs` | 按当前编码重建向量索引 |
 | `tools/migrate-groups.mjs` | 旧标签布局迁移到 rule/project 两组 |
 | `tools/bench-latency.mjs` | 模型冷启动、推理、内存 |

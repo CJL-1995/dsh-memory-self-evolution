@@ -7,31 +7,40 @@
 // 阈值不是常数，它是「模型 × 编码方式 × 记忆池」的函数。
 // 换模型、改编码、记忆池构成变化后都必须重跑本脚本重新标定。
 //
+// 相关输入依赖各自的记忆池，放在 ~/.memory-self-evolution/verify-cases.json，不随仓库分发：
+//   { "relevant": [["用户口吻的输入", "期望命中的记忆正文片段"]], "irrelevant": ["..."], "minHit": 14 }
+// irrelevant 可省略，省略时使用下方的通用无关输入；minHit 省略时要求相关输入全部命中。
+//
 // 用法：node tools/verify-gate.mjs
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { ROOT } from '../lib/core/config.mjs'
 import { readAllMemories } from '../lib/core/store.mjs'
 import { recall } from '../lib/core/recall.mjs'
 
-// [用户口吻的输入, 期望命中的记忆正文片段]
-const RELEVANT = [
-  ['为什么 imageSug 接口没有发请求', '三重去重机制'],
-  ['端模型的 demo 在哪里能看到', 'client_model'],
-  ['拍照选图那个提示文案是哪里来的', 'staticHint'],
-  ['导出成 word 和 pdf 的需求文档在哪', '多格式导出'],
-  ['导航栏那个毛玻璃效果深色模式要注意什么', '高斯模糊'],
-  ['液态玻璃踩过哪些坑', '液态玻璃'],
-  ['用户输入是哪个类负责处理的', 'IOEngine'],
-  ['选词优化的 shiply 开关叫什么', 'text_selector_exp_switch'],
-  ['实验埋点的 tab 怎么接入', 'tab 的接入文档'],
-  ['回答我的时候记得用中文', '始终使用中文回答'],
-  ['改完直接提交吧', '不要自动 commit'],
-  ['先别写代码，我们讨论方案', '先给出方案讨论'],
-  ['上网查点资料', 'WebSearch'],
-  ['写 OC 代码要遵守什么规范', 'ios-Objective-C-code-style'],
-]
+const CASES_FILE = path.join(ROOT, 'verify-cases.json')
+
+function loadCases() {
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(CASES_FILE, 'utf8'))
+  } catch (e) {
+    console.error(`读取用例文件失败 ${CASES_FILE}: ${e.message}`)
+    console.error('请按脚本头部注释的格式，用自己记忆库里的内容编写相关输入。')
+    return null
+  }
+  const valid = Array.isArray(data?.relevant) && data.relevant.length > 0
+    && data.relevant.every((item) => Array.isArray(item) && item.length === 2 && item.every((s) => typeof s === 'string' && s.trim()))
+  if (!valid) {
+    console.error(`用例文件 ${CASES_FILE} 的 relevant 必须是非空的 [输入, 期望片段] 数组`)
+    return null
+  }
+  return data
+}
 
 // 与记忆库任何内容都不相干，门控必须全部挡住
-const IRRELEVANT = [
+const DEFAULT_IRRELEVANT = [
   '帮我把这个 JSON 格式化一下',
   '今天天气怎么样',
   '把这段文字翻译成英文',
@@ -44,6 +53,14 @@ const IRRELEVANT = [
   '帮我看下这个文件',
   '这个方法怎么用',
 ]
+
+const cases = loadCases()
+if (!cases) {
+  process.exitCode = 1
+  process.exit()
+}
+const RELEVANT = cases.relevant
+const IRRELEVANT = Array.isArray(cases.irrelevant) && cases.irrelevant.length > 0 ? cases.irrelevant : DEFAULT_IRRELEVANT
 
 const pool = await readAllMemories()
 console.log(`召回池 ${pool.length} 条，相关输入 ${RELEVANT.length} 条，无关输入 ${IRRELEVANT.length} 条\n`)
@@ -88,10 +105,7 @@ if (leaks.length) {
 
 // 下限随记忆池变化：中心化的语料均值依赖池子构成，增删记忆会让所有分数平移，
 // 所以这个数字是「当前池子下的已知可达值」，不是恒定目标。调整前先看清失败项是真退步还是池子变了。
-//
-// 2026-09-27 删掉嵌套层数、参数个数、方法行数、读 HANDOFF 四条 rule 后，
-// 相关输入剩 14 条且全部命中。下限跟着改为 14。
-const MIN_HIT = 14
+const MIN_HIT = Number.isInteger(cases.minHit) ? cases.minHit : RELEVANT.length
 const MAX_HARMFUL = 0
 let failed = false
 if (harmful > MAX_HARMFUL) {
