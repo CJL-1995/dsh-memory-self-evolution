@@ -35,6 +35,20 @@ test('满30天才实际扣0.05并重置时间，未到期不改时间，跨多�
   assert.equal((await readState(h)).lastRunAt, START)
 })
 
+test('decayDays改为7时按7天判断满周期', async t => {
+  const h = await createMemoryHarness(t, { now: START })
+  h.settings.decayDays = 7
+  const recent = daysAgo(h, 7 - 1 / DAY)
+  await h.seed('rule', [memory('due', { lastSeen: daysAgo(h, 7) }), memory('recent', { lastSeen: recent })])
+  const writer = await h.load('lib/core/writer.mjs')
+  assert.equal(await writer.decayMemoriesOncePerDay(), 1)
+  const rows = new Map((await h.records()).map(mem => [mem.id, mem]))
+  assert.equal(rows.get('due').confidence, 0.45)
+  assert.equal(rows.get('due').lastSeen, START)
+  assert.equal(rows.get('recent').confidence, 0.5)
+  assert.equal(rows.get('recent').lastSeen, recent)
+})
+
 test('连续三个闲置周期实际为0.45、0.4、0.35，废弃后不再自动恢复或继续扣分', async t => {
   const h = await createMemoryHarness(t, { now: START })
   await h.seed('rule', [memory('a', { lastSeen: daysAgo(h, 30) })])
