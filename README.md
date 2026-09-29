@@ -64,7 +64,7 @@ npm run uninstall
 
 沉淀只走一条通路，由 `sideJudge` 决定。`confirm` 只决定写盘前弹不弹确认，两条通路都适用。
 
-**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。用户点选返回后，`postToolUse`（Cursor）或 `PostToolUse`（CodeBuddy、WorkBuddy）生成一次性 permit，放进模型上下文。主模型再调用对应写工具并带上 permit。permit 对不上，或点选前就调用，会拒绝。选「不落成」不发 permit。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
+**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。用户点选返回后，`postToolUse`（Cursor）或 `PostToolUse`（CodeBuddy、WorkBuddy）生成一次性 permit，放进模型上下文。CodeBuddy IDE 的提问工具 `ask_followup_question` 在用户答复后才把选择作为下一条输入送回，这时由 `UserPromptSubmit` 发放 permit。使用 CodeBuddy IDE 自定义智能体时，工具白名单里要包含 `ask_followup_question`，否则无法弹窗，文字确认拿不到 permit。主模型再调用对应写工具并带上 permit。permit 对不上，或点选前就调用，会拒绝。选「不落成」不发 permit。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
 
 **阻塞（`sideJudge=false`）。** 旁路不启动。先运行 `node tools/setup.mjs blocking`，它把 `sideJudge` 写成 false，并把 MCP 装到本机已有的 Cursor、codebuddy、WorkBuddy。重启客户端后，主模型才能看到写记忆工具。你说「以后都要先跑测试再提交」，主模型调 `memory_propose` 拿到相近记忆和分组建议。`confirm=true` 时再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。`confirm=false` 时，分组信号明确就按判重提示直接落盘；信号缺失时仍弹确认。`memory_propose` 返回最相近的两条记忆和相似度，由主模型判断新建、强化或合并。切回旁路运行 `node tools/setup.mjs sidepath`，然后重启。
 
@@ -167,7 +167,7 @@ npm run verify                                # 用当前用户的记忆池验�
 - 每轮 hook 端到端 **0.23 秒**，其中模型冷启动 104ms、单条编码 5.2ms
 - 1 万条记忆时的相似度计算 **6.2ms**——瓶颈不在算法，在索引的读盘与解析
 
-功能回归使用 `npm test`：当前包含 47 项隔离测试，覆盖置信度、每日实际衰减、衰减天数配置、时间戳重置、跨会话去重、CLI/MCP/旁路入口、旧数据兼容、召回边界、并发更新与锁恢复，不读取个人记忆或请求模型 API。`npm run verify` 是另一套依赖当前用户记忆池的召回评测，用例需按自己的记忆库写在 `~/.memory-self-evolution/verify-cases.json`，格式见 `tools/verify-gate.mjs` 头部注释。
+功能回归使用 `npm test`：当前包含 49 项隔离测试，覆盖置信度、每日实际衰减、衰减天数配置、时间戳重置、跨会话去重、CLI/MCP/旁路入口、旧数据兼容、召回边界、并发更新与锁恢复，不读取个人记忆或请求模型 API。`npm run verify` 是另一套依赖当前用户记忆池的召回评测，用例需按自己的记忆库写在 `~/.memory-self-evolution/verify-cases.json`，格式见 `tools/verify-gate.mjs` 头部注释。
 
 ## 已知限制
 

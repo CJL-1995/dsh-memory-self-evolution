@@ -22,7 +22,7 @@ import { renderRecall, renderSessionStart } from '../lib/core/render.mjs'
 import { collectCandidates, extractUserQueries, listCandidates } from '../lib/core/candidates.mjs'
 import { persistMemory } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { CONFIRM_MARK, hiddenNoticeForPrompt, isUserNotice, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
+import { CONFIRM_MARK, hiddenNoticeForPrompt, isUserNotice, issuePermitFromAnswer, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
 
 // Cursor 用 camelCase 事件名 + prompt 字段，输出 additional_context。
 // codebuddy 与 WorkBuddy 都是 Claude Code 系：PascalCase 事件名，输出 hookSpecificOutput.additionalContext。
@@ -153,7 +153,13 @@ async function runHook(argv) {
 
   const promptText = String(payload.prompt || payload.user_prompt || '').trim()
   let reminder = ''
+  let granted = ''
   if (kind === 'prompt') {
+    try {
+      granted = await issuePermitFromAnswer(promptText)
+    } catch (e) {
+      console.error(`[memory] 从点选答复发放写入许可失败: ${e.message}`)
+    }
     try {
       const settings = await loadSettings()
       if (settings.enabled && settings.sideJudge && promptText && !isUserNotice(promptText) && !promptText.includes(CONFIRM_MARK)) {
@@ -169,7 +175,7 @@ async function runHook(argv) {
   const hidden = kind === 'prompt' ? await hiddenNoticeForPrompt(agent, promptText) : ''
   const text = kind === 'session-start'
     ? await renderSessionStart()
-    : [hidden, reminder, recalled].filter(Boolean).join('\n\n')
+    : [hidden, granted, reminder, recalled].filter(Boolean).join('\n\n')
 
   process.stdout.write(JSON.stringify(wrapInjection(agent, event, text), null, 0))
 }
