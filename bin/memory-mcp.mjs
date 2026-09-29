@@ -9,9 +9,14 @@ import { recall } from '../lib/core/recall.mjs'
 import { inferGroup, mergeMemory, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
 import { dropCandidate, listCandidates } from '../lib/core/candidates.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { consumeSidePermit } from '../lib/core/sidepath.mjs'
+import { CONFIRM_TITLE, applyPendingByTool, consumeSidePermit } from '../lib/core/sidepath.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
+
+// 由 setup 写进 mcp.json 的 --agent 决定。旁路 permit 只对 Cursor 生效；缺省按 Cursor 处理。
+const agentIdx = process.argv.indexOf('--agent')
+const AGENT = agentIdx >= 0 ? String(process.argv[agentIdx + 1] || '') : ''
+const PERMIT_REQUIRED = AGENT !== 'codebuddy' && AGENT !== 'workbuddy'
 
 const TOOLS = [
   {
@@ -123,7 +128,7 @@ const TOOLS = [
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] })
 
-// 旁路不暴露 memory_propose。另外三个写工具可见，但必须带点选后发放的 permit。
+// 旁路不暴露 memory_propose。另外三个写工具可见；Cursor 下必须带点选后发放的 permit。
 const SIDEPATH_HIDDEN = new Set(['memory_propose'])
 
 function sidepathWriteRefusal() {
@@ -184,10 +189,28 @@ async function memoryRead(args) {
   return text(`${head}\n${body}`)
 }
 
+// CodeBuddy / WorkBuddy 的旁路确认：点选后调用对应写工具即可，参数由插件从待确认提案里取。
+const PLUGIN_CONFIRM_ONLY = `仅在插件发起的记忆确认（弹窗标题为「${CONFIRM_TITLE}」）被用户点选后调用；不要在自行发起的确认之后调用，也不要主动调用。`
+const SIDEPATH_NO_PERMIT_DESC = {
+  memory_persist: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「落成」或「仍新建」时调用，category 用选项里的标签。正文由插件按待确认提案写入，参数可以省略。选「不落成」不要调用。`,
+  memory_reinforce: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「强化已有记忆」时调用。插件按待确认提案强化（置信度 +0.1），参数可以省略。选「不落成」不要调用。`,
+  memory_merge: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「合并进已有记忆」时调用。插件按待确认提案合并（置信度 +0.1），参数可以省略。选「不落成」不要调用。`,
+}
+
 async function listTools() {
   const settings = await loadSettings()
   if (!settings.sideJudge) return TOOLS
-  return TOOLS.filter((tool) => !SIDEPATH_HIDDEN.has(tool.name))
+  return TOOLS.filter((tool) => !SIDEPATH_HIDDEN.has(tool.name)).map((tool) => {
+    if (PERMIT_REQUIRED || !SIDEPATH_NO_PERMIT_DESC[tool.name]) return tool
+    const { permit, ...properties } = tool.inputSchema.properties
+    return { ...tool, description: SIDEPATH_NO_PERMIT_DESC[tool.name], inputSchema: { ...tool.inputSchema, properties, required: [] } }
+  })
+}
+
+// 旁路写入：Cursor 校验 permit；另外两端按待确认提案执行，没有对应提案时返回 null，按参数直接写入。
+async function sidepathWrite(tool, args) {
+  if (PERMIT_REQUIRED) return consumeSidePermit(tool, args)
+  return applyPendingByTool(tool, args)
 }
 
 async function memoryPropose(args) {
@@ -269,8 +292,8 @@ function blockingDedupConfirm(content, guess, similar) {
 async function memoryPersist(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
-    const result = await consumeSidePermit('memory_persist', args)
-    return text(result.message)
+    const result = await sidepathWrite('memory_persist', args)
+    if (result) return text(result.message)
   }
   const mem = await persistMemory({
     text: args.text,
@@ -284,8 +307,8 @@ async function memoryPersist(args) {
 async function memoryReinforce(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
-    const result = await consumeSidePermit('memory_reinforce', args)
-    return text(result.message)
+    const result = await sidepathWrite('memory_reinforce', args)
+    if (result) return text(result.message)
   }
   const mem = await reinforceMemory(String(args.id || '').trim())
   return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}）`)
@@ -294,8 +317,8 @@ async function memoryReinforce(args) {
 async function memoryMerge(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
-    const result = await consumeSidePermit('memory_merge', args)
-    return text(result.message)
+    const result = await sidepathWrite('memory_merge', args)
+    if (result) return text(result.message)
   }
   const mem = await mergeMemory(String(args.id || '').trim(), args.text)
   return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}）`)

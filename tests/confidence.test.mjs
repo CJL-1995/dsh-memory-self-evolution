@@ -301,11 +301,16 @@ test('旁路 permit 入口保持授权校验，并使用统一置信度规则', 
   assert.equal((await h.records())[0].confidence, 0.7)
 })
 
-test('codebuddy 的 Stop 续轮把确认指令写进 reason，并注明 ask_followup_question', async t => {
+test('codebuddy 的 Stop 续轮把确认指令写进 reason，注明 ask_followup_question，且不要求 permit', async t => {
   const h = await createMemoryHarness(t)
   const side = await h.load('lib/core/sidepath.mjs')
-  const model = side.buildFollowup('codebuddy', [{ proposal: { text: '新规则', category: 'rule', action: 'create' } }])
+  const proposal = { text: '新规则', category: 'rule', action: 'create' }
+  const model = side.buildFollowup('codebuddy', [{ proposal }])
   assert.match(model, /ask_followup_question/)
+  assert.match(model, /memory_persist/)
+  assert.match(model, /弹窗标题写「记忆确认·插件」/)
+  assert.doesNotMatch(model, /permit/)
+  assert.match(side.buildFollowup('cursor', [{ proposal }]), /permit/)
   const out = side.buildStopResponse('codebuddy', '用户可见文案', model)
   assert.equal(out.decision, 'block')
   assert.ok(out.reason.startsWith('用户可见文案'))
@@ -316,27 +321,45 @@ test('codebuddy 的 Stop 续轮把确认指令写进 reason，并注明 ask_foll
   assert.equal(cursor.followup_message, '用户可见文案')
 })
 
-test('点选以 <question_answer> 作为下一条输入送回时发放 permit，答复本身不触发旁路判别', async t => {
+test('codebuddy 点选后调用哪个写工具就按待确认提案执行，不需要参数和 permit', async t => {
   const h = await createMemoryHarness(t)
   await h.seed('rule', [memory('old', { text: '旧规则' })])
   const side = await h.load('lib/core/sidepath.mjs')
   const jobs = path.join(h.root, 'side')
   await fsp.mkdir(jobs)
   const job = (id, proposal) => fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
-    id, status: 'ready', prompted: true, applied: false, startedAt: '2026-09-29T00:00:00.000Z', proposal,
+    id, agent: 'codebuddy', status: 'ready', prompted: true, applied: false, startedAt: '2026-09-29T00:00:00.000Z', proposal,
   }))
-  const answer = choice => `<question_answer>\n<questions>\n<question_item id="q-0">\n<question>检测到一条记忆。是否落成记忆。</question>\n<answers>\n${choice}\n</answers>\n</question_item>\n</questions>\n</question_answer>`
+  assert.equal(side.shouldJudgePrompt('<question_answer><answers>不落成</answers></question_answer>'), false)
 
   await job('j_merge', { action: 'merge', text: '新说法', category: 'rule', targetId: 'old', targetText: '旧规则', mergedText: '合并后的规则' })
-  const prompt = answer('合并进已有记忆 「旧规则」')
-  assert.equal(side.shouldJudgePrompt(prompt), false)
-  const permit = /permit：(\S+)/.exec(await side.issuePermitFromAnswer(prompt))?.[1]
-  assert.ok(permit)
-  assert.equal((await side.consumeSidePermit('memory_merge', { id: 'old', text: '合并后的规则', permit })).ok, true)
-  assert.equal((await h.records())[0].text, '合并后的规则')
+  assert.equal((await side.applyPendingByTool('memory_merge', {})).ok, true)
+  const merged = (await h.records())[0]
+  assert.equal(merged.text, '合并后的规则')
+  assert.equal(merged.confidence, 0.6)
 
-  await job('j_skip', { action: 'create', text: '另一条规则', category: 'rule' })
-  assert.match(await side.issuePermitFromAnswer(answer('不落成')), /不落成/)
-  assert.equal(await side.issuePermitFromAnswer('普通输入'), '')
-  assert.equal(await side.issuePermitFromTool({ tool_name: 'AskUserQuestion', tool_output: '{"answers":{},"message":"User response will be in <question_answer> format"}' }), '')
+  await job('j_create', { action: 'create', text: '新的项目事实', category: 'rule' })
+  assert.equal((await side.applyPendingByTool('memory_persist', { category: 'project' })).ok, true)
+  assert.equal((await h.records('project'))[0].text, '新的项目事实')
+
+  assert.equal(await side.applyPendingByTool('memory_reinforce', {}), null)
+})
+
+test('codebuddy 新一次弹窗会作废之前问过但未点选的提案', async t => {
+  const h = await createMemoryHarness(t)
+  const side = await h.load('lib/core/sidepath.mjs')
+  const jobs = path.join(h.root, 'side')
+  await fsp.mkdir(jobs)
+  const write = (id, extra) => fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
+    id, agent: 'codebuddy', status: 'ready', applied: false, startedAt: '2026-09-29T00:00:00.000Z',
+    proposal: { action: 'create', text: `提案 ${id}`, category: 'rule' }, ...extra,
+  }))
+  await write('j_stale', { prompted: true })
+  await write('j_new', { prompted: false })
+  const out = await side.takeSideFollowup('codebuddy', {}, 0)
+  assert.equal(out.decision, 'block')
+  assert.match(out.reason, /提案 j_new/)
+  assert.doesNotMatch(out.reason, /提案 j_stale/)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'j_stale.json'), 'utf8')).reason, 'superseded')
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'j_new.json'), 'utf8')).prompted, true)
 })

@@ -64,7 +64,7 @@ npm run uninstall
 
 沉淀只走一条通路，由 `sideJudge` 决定。`confirm` 只决定写盘前弹不弹确认，两条通路都适用。
 
-**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。用户点选返回后，`postToolUse`（Cursor）或 `PostToolUse`（CodeBuddy、WorkBuddy）生成一次性 permit，放进模型上下文。CodeBuddy IDE 的提问工具 `ask_followup_question` 在用户答复后才把选择作为下一条输入送回，这时由 `UserPromptSubmit` 发放 permit。使用 CodeBuddy IDE 自定义智能体时，工具白名单里要包含 `ask_followup_question`，否则无法弹窗，文字确认拿不到 permit。主模型再调用对应写工具并带上 permit。permit 对不上，或点选前就调用，会拒绝。选「不落成」不发 permit。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
+**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。permit 只对 Cursor 生效：用户点选返回后，`postToolUse` 生成一次性 permit 放进模型上下文，主模型再调用对应写工具并带上 permit；permit 对不上或点选前就调用会拒绝，选「不落成」不发 permit。CodeBuddy 和 WorkBuddy 不校验 permit：点选后主模型选合并就调 `memory_merge`、选强化就调 `memory_reinforce`、选落成就调 `memory_persist`，参数可以省略，插件按待确认提案写入；新一次弹窗会作废之前问过但没点选的提案。这两端的 MCP 靠 `mcp.json` 里的 `--agent` 区分，旧安装需重新运行 `node tools/setup.mjs sidepath`。使用 CodeBuddy IDE 自定义智能体时，工具白名单里要包含 `ask_followup_question`，否则无法弹窗。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
 
 **阻塞（`sideJudge=false`）。** 旁路不启动。先运行 `node tools/setup.mjs blocking`，它把 `sideJudge` 写成 false，并把 MCP 装到本机已有的 Cursor、codebuddy、WorkBuddy。重启客户端后，主模型才能看到写记忆工具。你说「以后都要先跑测试再提交」，主模型调 `memory_propose` 拿到相近记忆和分组建议。`confirm=true` 时再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。`confirm=false` 时，分组信号明确就按判重提示直接落盘；信号缺失时仍弹确认。`memory_propose` 返回最相近的两条记忆和相似度，由主模型判断新建、强化或合并。切回旁路运行 `node tools/setup.mjs sidepath`，然后重启。
 
@@ -81,7 +81,9 @@ node bin/memory.mjs rule add "所有异常处理处都需要添加日志"
 - **旁路模式**：`sessionStart` 只注入规则列表和职责边界，不附项目读取说明、沉淀规则、候选提示或 `confirm` 状态。记忆提取、判重和沉淀由后台负责，包括用户明确要求「记住」的情况；主模型专注当前任务，仅按插件后续指令执行确认或授权写入。
 - **每轮旁路输入**：插件启用时，即使没有召回结果，也会追加以下提醒；确认续轮、结果通知和空输入不重复追加。阻塞模式不注入此提醒，也不受 `confirm` 值影响。
 
-  > 记忆分析与沉淀由 memory-self-evolution 后台负责，请勿重复处理；仅按插件后续指令执行确认或写入。
+  > 记忆由 memory-self-evolution 插件在后台判断。用户陈述偏好、规范或要求记住时，你只需回应并照做：不要判断是否该记，不要调用提问工具发起「检测到一条记忆」确认，不要调用 memory_persist、memory_reinforce、memory_merge。只有收到含 MEMORY_CONFIRM_V1 的插件指令时，才按指令弹窗。
+
+  插件发起的确认弹窗标题固定为「记忆确认·插件」。CodeBuddy、WorkBuddy 下写工具的描述要求只在这类弹窗被点选后调用，用来和模型自行模仿发起的弹窗区分。
 
 - **阻塞模式**：保留规则列表、项目概览、沉淀规则及候选提示，由主模型判重并选择动作。
 - **规则上限**：两种模式都从未废弃的 `rule` 中按已存储置信度降序选前 50 条，同分时最近活跃的在前。每轮语义召回仍从全部未废弃的 `rule` 和 `project` 中检索，不受该 50 条限制。
@@ -167,7 +169,7 @@ npm run verify                                # 用当前用户的记忆池验�
 - 每轮 hook 端到端 **0.23 秒**，其中模型冷启动 104ms、单条编码 5.2ms
 - 1 万条记忆时的相似度计算 **6.2ms**——瓶颈不在算法，在索引的读盘与解析
 
-功能回归使用 `npm test`：当前包含 49 项隔离测试，覆盖置信度、每日实际衰减、衰减天数配置、时间戳重置、跨会话去重、CLI/MCP/旁路入口、旧数据兼容、召回边界、并发更新与锁恢复，不读取个人记忆或请求模型 API。`npm run verify` 是另一套依赖当前用户记忆池的召回评测，用例需按自己的记忆库写在 `~/.memory-self-evolution/verify-cases.json`，格式见 `tools/verify-gate.mjs` 头部注释。
+功能回归使用 `npm test`：当前包含 50 项隔离测试，覆盖置信度、每日实际衰减、衰减天数配置、时间戳重置、跨会话去重、CLI/MCP/旁路入口、旧数据兼容、召回边界、并发更新与锁恢复，不读取个人记忆或请求模型 API。`npm run verify` 是另一套依赖当前用户记忆池的召回评测，用例需按自己的记忆库写在 `~/.memory-self-evolution/verify-cases.json`，格式见 `tools/verify-gate.mjs` 头部注释。
 
 ## 已知限制
 

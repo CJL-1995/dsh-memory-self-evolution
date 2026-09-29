@@ -86,7 +86,7 @@ function upsertClaudeStyleHook(list, command, timeout, agent) {
   return 'added'
 }
 
-function registerMcp(file) {
+function registerMcp(file, agent) {
   const data = readJson(file, { mcpServers: {} })
   if (!data.mcpServers || typeof data.mcpServers !== 'object') data.mcpServers = {}
   const existed = Boolean(data.mcpServers['memory-self-evolution'] || data.mcpServers['dsh-memory'])
@@ -94,7 +94,7 @@ function registerMcp(file) {
   data.mcpServers['memory-self-evolution'] = {
     type: 'stdio',
     command: nodeBin,
-    args: [mcpScript],
+    args: [mcpScript, '--agent', agent],
     description: '跨会话长期记忆：读取记忆、沉淀新记忆、强化已有记忆、处理待确认候选',
   }
   writeJson(file, data)
@@ -116,7 +116,7 @@ function registerCursor(home) {
     notes.push(`${spec.event} ${action}`)
   }
   writeJson(hooksFile, data)
-  const mcp = registerMcp(path.join(dir, 'mcp.json'))
+  const mcp = registerMcp(path.join(dir, 'mcp.json'), 'cursor')
   return `hooks ${notes.join(', ')}; mcp ${mcp}`
 }
 
@@ -136,7 +136,7 @@ function registerClaudeStyle(home, dirName, agent) {
     notes.push(`${spec.event} ${action}`)
   }
   writeJson(settingsFile, data)
-  const mcp = registerMcp(path.join(dir, 'mcp.json'))
+  const mcp = registerMcp(path.join(dir, 'mcp.json'), agent)
   return `hooks ${notes.join(', ')}; mcp ${mcp}`
 }
 
@@ -321,5 +321,5 @@ if (chosenSidepath === false) {
   console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
 }
 if (chosenSidepath === true) {
-  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。点选前调用会被拒绝。')
+  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。Cursor 下点选前调用会被拒绝；CodeBuddy、WorkBuddy 点选后直接调用。')
 }

@@ -230,7 +230,7 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 
 按本轮输入向量召回 Top-K，不相关时不注入记忆块。最终命中每个 ID 增加 0.05 置信度，具体边界见 §3.2。
 
-仅在插件启用且为旁路模式的普通非空输入中，额外注入「记忆分析与沉淀由 memory-self-evolution 后台负责，请勿重复处理；仅按插件后续指令执行确认或写入。」这条提醒不依赖 `confirm` 或是否召回命中；确认续轮、结果通知不重复追加。阻塞模式完全不加此提醒。
+仅在插件启用且为旁路模式的普通非空输入中，额外注入「记忆由 memory-self-evolution 插件在后台判断。用户陈述偏好、规范或要求记住时，你只需回应并照做：不要判断是否该记，不要调用提问工具发起「检测到一条记忆」确认，不要调用 memory_persist、memory_reinforce、memory_merge。只有收到含 MEMORY_CONFIRM_V1 的插件指令时，才按指令弹窗。」旧版写作「仅按插件后续指令执行确认或写入」，模型会把「执行确认」误读为由自己判断并发起确认，并在同一会话中模仿插件弹窗。插件确认弹窗标题固定为「记忆确认·插件」，CodeBuddy / WorkBuddy 的写工具描述据此只接受插件弹窗之后的调用。这条提醒不依赖 `confirm` 或是否召回命中；确认续轮、结果通知不重复追加。阻塞模式完全不加此提醒。
 
 ### 5.3 每轮结束（`stop` / `Stop`）
 
@@ -283,7 +283,7 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 1. `beforeSubmitPrompt` / `UserPromptSubmit` 把用户原话交给后台进程，自己马上返回召回结果。
 2. 后台用 API 调用模型，Cursor、CodeBuddy、WorkBuddy 共用，不走各家 CLI。请求 `sideApiBase/chat/completions`。`sideApiBase`、`sideApiModel`、`apiKey` 都没有缺省值，缺任何一项这一轮不写。前两项在 `config.json`，密钥在 `~/.memory-self-evolution/side-secret.json` 的 `apiKey`。判别只看用户原话，按显式指令、隐式偏好或项目事实、排除项的顺序决定。一次性执行、本次开发改动（即使句中有「以后」）、尚未定稿的方案讨论，不记。模型若只吐出一句陈述、没有 JSON，也按「要记」处理。库里已有记忆时，另一次调用把余弦最高的 3 条（含 id 和正文）交给判重模型。相似度只用来取出这 3 条，是否同一件事只看对象是不是同一个规则域。平台、语言不同仍是同一件事，适用范围扩大或收窄就合并，决定新增、强化已有，或合并成一条新正文。没配密钥或调用失败就记成「不是记忆」，会话照常结束。`stop` 只在宿主给的结束窗口里等一会儿；这一轮等不到就留在池里，下次结束再处理，不把结果丢掉。
 3. 模型认为该记，才向量化，并把相似度最高的 3 条交给判重模型，输出新增、强化（带回 id）或合并（带回 id 与合并后正文）。库为空则直接新增。模型拿不准或 id 对不上时，确认卡片上同时给出强化和新增。用户确认合并后，用新正文替换该条、删掉旧向量并重新向量化，再做一次强化。每句原话单独一份结果，不按会话覆盖。
-4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆，只让主模型弹出确认，不写盘。Cursor 返回 `followup_message`，下一轮 `beforeSubmitPrompt` 再补回完整确认指令。CodeBuddy / WorkBuddy 返回 `decision: block`，确认指令直接拼在 `reason` 里：CodeBuddy IDE 的 Stop 续轮只把 `reason` 交给模型，会丢弃 `additionalContext`。用户点选返回后，`postToolUse` / `PostToolUse` 生成一次性 permit，放进 `additional_context`（Cursor）或 `hookSpecificOutput.additionalContext`（CodeBuddy、WorkBuddy）。CodeBuddy IDE 的提问工具 `ask_followup_question` 是响应式的，工具结果里没有选择，点选以 `<question_answer>` 作为下一条输入送回；`UserPromptSubmit` 识别这类答复后发放 permit，且不把它当作新输入交给旁路判别。自定义智能体的工具白名单里必须包含 `ask_followup_question`，否则模型只能用文字提问，拿不到 permit。主模型再调用 `memory_persist`、`memory_reinforce` 或 `memory_merge` 并带上 permit。参数必须与提案一致。选「不落成」不生成 permit。为 false 时不弹确认：旁路在后台直接写入、强化或合并，不发 permit。`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
+4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆，只让主模型弹出确认，不写盘。Cursor 返回 `followup_message`，下一轮 `beforeSubmitPrompt` 再补回完整确认指令。CodeBuddy / WorkBuddy 返回 `decision: block`，确认指令直接拼在 `reason` 里：CodeBuddy IDE 的 Stop 续轮只把 `reason` 交给模型，会丢弃 `additionalContext`。permit 只对 Cursor 生效：用户点选返回后，`postToolUse` 生成一次性 permit 放进 `additional_context`，主模型再调用 `memory_persist`、`memory_reinforce` 或 `memory_merge` 并带上 permit，参数必须与提案一致，选「不落成」不生成 permit。CodeBuddy / WorkBuddy 不校验 permit：CodeBuddy IDE 的 `ask_followup_question` 展示问题即返回，`PostToolUse` 拿不到选择；点选以 `<question_answer>` 作为下一条输入只交给模型，传给 `UserPromptSubmit` 的 `prompt` 为空；Stop 续轮注入的指令也不进入会话历史。因此这两端由主模型按点选调用对应写工具，参数可省略，MCP 按该端最近一次弹窗的待确认提案执行对应动作，没有提案时按传入参数直接写入；新一次弹窗会作废此前问过但未点选的提案。MCP 通过 `mcp.json` 中的 `--agent` 区分客户端，缺省按 Cursor 处理。`<question_answer>` 答复不交给旁路判别。自定义智能体的工具白名单里必须包含 `ask_followup_question`，否则模型只能用文字提问。为 false 时不弹确认：旁路在后台直接写入、强化或合并，不发 permit。`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
 
 问过但还没写完的提案留在池里，等 permit 被消费或用户选「不落成」。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
 
@@ -336,9 +336,9 @@ V8 单字符串上限约 5.4 亿字符，按每条 15.4KB 算，**到大约 3.4 
 
 | 脚本 | 用途 |
 |---|---|
-| `tests/confidence.test.mjs` | 24 项隔离功能回归：置信度、工具入口、模式、并发、兼容与 CodeBuddy 确认续轮 |
+| `tests/confidence.test.mjs` | 25 项隔离功能回归：置信度、工具入口、模式、并发、兼容与 CodeBuddy 免 permit 确认 |
 | `tests/decay.test.mjs` | 22 项每日衰减回归：实际扣分、衰减天数、时间戳、跨会话去重、失败重试与三端 hook |
-| `tests/settings.test.mjs` | 3 项配置回归：`decayDays` 默认值、非法值回退、修改校验；`npm test` 共运行 49 项 |
+| `tests/settings.test.mjs` | 3 项配置回归：`decayDays` 默认值、非法值回退、修改校验；`npm test` 共运行 50 项 |
 | `tools/verify-gate.mjs` | 召回与门控的回归基线，`npm run verify`；使用当前用户记忆池和本机 `verify-cases.json` 用例，可能补建索引 |
 | `tools/rebuild-index.mjs` | 按当前编码重建向量索引 |
 | `tools/migrate-groups.mjs` | 旧标签布局迁移到 rule/project 两组 |
