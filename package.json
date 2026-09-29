@@ -17,6 +17,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs",
     "setup": "node tools/setup.mjs",
     "uninstall": "node tools/uninstall.mjs",
     "verify": "node tools/verify-gate.mjs",

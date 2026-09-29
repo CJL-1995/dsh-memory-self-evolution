@@ -22,7 +22,7 @@ import { renderRecall, renderSessionStart } from '../lib/core/render.mjs'
 import { collectCandidates, extractUserQueries, listCandidates } from '../lib/core/candidates.mjs'
 import { persistMemory, refreshDeprecated } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { hiddenNoticeForPrompt, isUserNotice, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
+import { CONFIRM_MARK, hiddenNoticeForPrompt, isUserNotice, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
 
 // Cursor 用 camelCase 事件名 + prompt 字段，输出 additional_context。
 // codebuddy 与 WorkBuddy 都是 Claude Code 系：PascalCase 事件名，输出 hookSpecificOutput.additionalContext。
@@ -160,8 +160,13 @@ async function runHook(argv) {
   }
 
   const promptText = String(payload.prompt || payload.user_prompt || '').trim()
+  let reminder = ''
   if (kind === 'prompt') {
     try {
+      const settings = await loadSettings()
+      if (settings.enabled && settings.sideJudge && promptText && !isUserNotice(promptText) && !promptText.includes(CONFIRM_MARK)) {
+        reminder = '记忆分析与沉淀由 memory-self-evolution 后台负责，请勿重复处理；仅按插件后续指令执行确认或写入。'
+      }
       await maybeStartSideJob({ agent, payload, promptText })
     } catch (e) {
       console.error(`[memory] 旁路启动失败，本轮不判断: ${e.message}`)
@@ -172,7 +177,7 @@ async function runHook(argv) {
   const hidden = kind === 'prompt' ? await hiddenNoticeForPrompt(agent, promptText) : ''
   const text = kind === 'session-start'
     ? await renderSessionStart()
-    : [hidden, recalled].filter(Boolean).join('\n\n')
+    : [hidden, reminder, recalled].filter(Boolean).join('\n\n')
 
   process.stdout.write(JSON.stringify(wrapInjection(agent, event, text), null, 0))
 }
@@ -214,7 +219,7 @@ async function runRuleAdd(text) {
     process.exitCode = 1
     return
   }
-  const mem = await persistMemory({ text, category: 'rule', confidence: 0.9, evidence: '用户通过 CLI 直接添加' })
+  const mem = await persistMemory({ text, category: 'rule', evidence: '用户通过 CLI 直接添加' })
   console.log(`已新增规则：${mem.text}`)
   console.log(`置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}`)
   console.log('下个会话开始起无条件生效。')

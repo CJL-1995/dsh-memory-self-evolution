@@ -45,7 +45,7 @@ const TOOLS = [
   },
   {
     name: 'memory_persist',
-    description: '把记忆正式写入。阻塞模式在 memory_propose 之后、且用户已确认时调用。旁路确认模式只在点选返回并拿到一次性 permit 之后调用，permit 对不上会拒绝。',
+    description: '把记忆正式写入，初始置信度固定为 0.5。阻塞模式在 memory_propose 之后、且用户已确认时调用。旁路确认模式只在点选返回并拿到一次性 permit 之后调用，permit 对不上会拒绝。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -56,7 +56,6 @@ const TOOLS = [
           description: 'rule=无条件遵守的偏好与规范，每轮都会注入；project=需要时才查阅的项目事实，靠相关性召回。拿不准时选 rule：漏判规则会让它静默失效，多判只是多占一点上下文。',
         },
         evidence: { type: 'string' },
-        confidence: { type: 'number', description: '用户表达的明确程度 0~1，越明确越高，下限按 0.5 处理' },
         permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['text', 'category'],
@@ -65,7 +64,7 @@ const TOOLS = [
   },
   {
     name: 'memory_reinforce',
-    description: '强化一条已有记忆（置信度 +0.1、观测次数 +1）。阻塞模式在用户确认强化后调用。旁路确认模式只在拿到一次性 permit 之后调用。',
+    description: '强化一条已有记忆（置信度 +0.1）。阻塞模式在用户确认强化后调用。旁路确认模式只在拿到一次性 permit 之后调用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,7 +77,7 @@ const TOOLS = [
   },
   {
     name: 'memory_merge',
-    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1、观测次数 +1）。旁路确认模式只在拿到一次性 permit 之后调用。',
+    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1）。旁路确认模式只在拿到一次性 permit 之后调用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,7 +276,6 @@ async function memoryPersist(args) {
     text: args.text,
     category: args.category,
     evidence: args.evidence,
-    confidence: args.confidence,
   })
   const note = mem.category === 'rule' ? '下个会话开始起无条件注入' : '将按相关性自动召回'
   return text(`已沉淀为 ${mem.category}：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}）。${note}。`)
@@ -290,7 +288,7 @@ async function memoryReinforce(args) {
     return text(result.message)
   }
   const mem = await reinforceMemory(String(args.id || '').trim())
-  return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次）`)
+  return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}）`)
 }
 
 async function memoryMerge(args) {
@@ -300,7 +298,7 @@ async function memoryMerge(args) {
     return text(result.message)
   }
   const mem = await mergeMemory(String(args.id || '').trim(), args.text)
-  return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次，id ${mem.id}）`)
+  return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}）`)
 }
 
 async function memoryReview() {
