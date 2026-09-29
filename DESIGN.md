@@ -167,7 +167,7 @@ bin/
 
 ### 5.1 会话开始（`sessionStart` / `SessionStart`）
 
-`rule` 组全量注入，约 1100 字符，外加 `project` 组的条数概览、沉淀规则、待确认候选提示。
+`rule` 组全量注入，约 1100 字符，外加 `project` 组的条数概览、沉淀规则、待确认候选提示。`rule` 与 `project` 都为空时仍注入这一段，至少包含沉淀规则。首次安装两组都是空的，主模型仍需知道当前是旁路还是阻塞。
 
 规则不能只靠召回，这是机制上的边界。实测 4 组「用户没提及但规则本该生效」的输入：
 
@@ -194,7 +194,7 @@ bin/
 
 沉淀只走一条通路，由 `sideJudge` 决定，和 `confirm` 无关。
 
-- `sideJudge=true`：旁路，见 §6.4。`memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge` 不出现在客户端工具列表里。旧会话若仍调用，直接拒绝，不写盘。
+- `sideJudge=true`：旁路，见 §6.4。`memory_propose` 不出现在客户端工具列表里。`memory_persist`、`memory_reinforce`、`memory_merge` 出现，但只接受点选后发放的一次性 permit。没有 permit 或对不上就拒绝，不写盘。阻塞模式不校验 permit。
 - `sideJudge=false`：阻塞。旁路不启动。主模型调用 `memory_propose`。切换到这条通路只能运行 `node tools/setup.mjs blocking`，它写入 `sideJudge=false` 并把 MCP 装到已安装的 Cursor、codebuddy、WorkBuddy。切回旁路用 `node tools/setup.mjs sidepath`。`memory_config` 不能改 `sideJudge`。
 
 `confirm` 只决定写盘前要不要弹确认，两条通路都适用。
@@ -230,14 +230,14 @@ bin/
 
 ### 6.4 旁路
 
-`sideJudge=true` 时只走这条通路。客户端工具列表里没有写记忆工具。关键词候选池接不住「参考这篇 iwiki」这种句子，旁路用便宜模型补判，并且不挡住本轮回答：
+`sideJudge=true` 时只走这条通路。客户端工具列表里没有 `memory_propose`。关键词候选池接不住「参考这篇 iwiki」这种句子，旁路用便宜模型补判，并且不挡住本轮回答：
 
 1. `beforeSubmitPrompt` / `UserPromptSubmit` 把用户原话交给后台进程，自己马上返回召回结果。
 2. 后台用 API 调用模型，Cursor、CodeBuddy、WorkBuddy 共用，不走各家 CLI。请求 `sideApiBase/chat/completions`。`sideApiBase`、`sideApiModel`、`apiKey` 都没有缺省值，缺任何一项这一轮不写。前两项在 `config.json`，密钥在 `~/.memory-self-evolution/side-secret.json` 的 `apiKey`。判别只看用户原话，按显式指令、隐式偏好或项目事实、排除项的顺序决定。一次性执行、本次开发改动（即使句中有「以后」）、尚未定稿的方案讨论，不记。模型若只吐出一句陈述、没有 JSON，也按「要记」处理。库里已有记忆时，另一次调用把余弦最高的 3 条（含 id 和正文）交给判重模型。相似度只用来取出这 3 条，是否同一件事只看对象是不是同一个规则域。平台、语言不同仍是同一件事，适用范围扩大或收窄就合并，决定新增、强化已有，或合并成一条新正文。没配密钥或调用失败就记成「不是记忆」，会话照常结束。`stop` 只在宿主给的结束窗口里等一会儿；这一轮等不到就留在池里，下次结束再处理，不把结果丢掉。
 3. 模型认为该记，才向量化，并把相似度最高的 3 条交给判重模型，输出新增、强化（带回 id）或合并（带回 id 与合并后正文）。库为空则直接新增。模型拿不准或 id 对不上时，确认卡片上同时给出强化和新增。用户确认合并后，用新正文替换该条、删掉旧向量并重新向量化，再做一次强化。每句原话单独一份结果，不按会话覆盖。
-4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆。Cursor 返回 `followup_message`，CodeBuddy / WorkBuddy 返回 `decision: block`，宿主再开一轮，有几条就问几条。没有就输出空对象。为 false 时不弹确认：旁路在后台直接写入、强化或合并，池里不再留下候选。`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
+4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆，只让主模型弹出确认，不写盘。Cursor 返回 `followup_message`，CodeBuddy / WorkBuddy 返回 `decision: block`。用户点选返回后，`postToolUse` / `PostToolUse` 生成一次性 permit，放进 `additional_context`（Cursor）或 `hookSpecificOutput.additionalContext`（CodeBuddy、WorkBuddy）。主模型再调用 `memory_persist`、`memory_reinforce` 或 `memory_merge` 并带上 permit。参数必须与提案一致。选「不落成」不生成 permit。为 false 时不弹确认：旁路在后台直接写入、强化或合并，不发 permit。`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
 
-问过的条目作废，避免同一次结束反复弹。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
+问过但还没写完的提案留在池里，等 permit 被消费或用户选「不落成」。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
 
 ## 7. 并发与容错
 

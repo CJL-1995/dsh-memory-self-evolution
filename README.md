@@ -42,11 +42,11 @@ npm run setup
 
 | 客户端 | hook | MCP |
 |---|---|---|
-| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop` | `mcp.json` 的 `memory-self-evolution` |
-| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
-| WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
+| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop`、`postToolUse` | `mcp.json` 的 `memory-self-evolution` |
+| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop`、`PostToolUse` | `mcp.json` 的 `memory-self-evolution` |
+| WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop`、`PostToolUse` | `mcp.json` 的 `memory-self-evolution` |
 
-三端写入的是同一个 MCP 进程。旁路还是阻塞不改变装上去的程序，只改变 `config.json` 里的 `sideJudge`。进程启动后读这个值：旁路不列出 `memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge`，阻塞才列出。hook 两组模式都装，和通路无关。
+三端写入的是同一个 MCP 进程。旁路还是阻塞不改变装上去的程序，只改变 `config.json` 里的 `sideJudge`。进程启动后读这个值：旁路不列出 `memory_propose`，`memory_persist`、`memory_reinforce`、`memory_merge` 仍然列出。阻塞四个都列出。hook 两组模式都装，和通路无关。
 
 注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。之后只改通路时运行 `node tools/setup.mjs sidepath` 或 `node tools/setup.mjs blocking`，不再提问，同样会先确认模型缓存再重新注册。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
 
@@ -64,7 +64,7 @@ npm run uninstall
 
 沉淀只走一条通路，由 `sideJudge` 决定。`confirm` 只决定写盘前弹不弹确认，两条通路都适用。
 
-**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。Cursor、codebuddy、WorkBuddy 的工具列表里没有 `memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 仍让主模型弹出确认，但主模型没有写工具，点选后不会落盘。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
+**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。用户点选返回后，`postToolUse`（Cursor）或 `PostToolUse`（CodeBuddy、WorkBuddy）生成一次性 permit，放进模型上下文。主模型再调用对应写工具并带上 permit。permit 对不上，或点选前就调用，会拒绝。选「不落成」不发 permit。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
 
 **阻塞（`sideJudge=false`）。** 旁路不启动。先运行 `node tools/setup.mjs blocking`，它把 `sideJudge` 写成 false，并把 MCP 装到本机已有的 Cursor、codebuddy、WorkBuddy。重启客户端后，主模型才能看到写记忆工具。你说「以后都要先跑测试再提交」，主模型调 `memory_propose` 拿到相近记忆和分组建议。`confirm=true` 时再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。`confirm=false` 时，分组信号明确就按判重提示直接落盘；信号缺失时仍弹确认。`memory_propose` 返回最相近的两条记忆和相似度，由主模型判断新建、强化或合并。切回旁路运行 `node tools/setup.mjs sidepath`，然后重启。
 
@@ -107,7 +107,7 @@ npm run verify                                # 跑召回回归测试
 | `memory_discard` | 丢弃候选 |
 | `memory_config` | 查看或修改配置 |
 
-`memory_propose`、`memory_persist`、`memory_reinforce`、`memory_merge` 只在阻塞模式出现在工具列表里。旁路模式客户端看不到它们。`memory_propose` 不落盘：它返回最相近的两条记忆和相似度，让主模型判断新建、强化或合并。相似度越高越应当强化，而不是新建。
+`memory_propose` 只在阻塞模式出现。旁路模式仍列出 `memory_persist`、`memory_reinforce`、`memory_merge`，但必须带点选后发放的一次性 permit。`memory_propose` 不落盘：它返回最相近的两条记忆和相似度，让主模型判断新建、强化或合并。相似度越高越应当强化，而不是新建。
 
 ## 配置
 

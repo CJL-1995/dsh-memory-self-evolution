@@ -22,14 +22,14 @@ import { renderRecall, renderSessionStart } from '../lib/core/render.mjs'
 import { collectCandidates, extractUserQueries, listCandidates } from '../lib/core/candidates.mjs'
 import { persistMemory, refreshDeprecated } from '../lib/core/writer.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { isUserNotice, maybeStartSideJob, modelNoticeForUserText, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
+import { hiddenNoticeForPrompt, isUserNotice, issuePermitFromTool, maybeStartSideJob, runSideJob, takeSideFollowup } from '../lib/core/sidepath.mjs'
 
 // Cursor 用 camelCase 事件名 + prompt 字段，输出 additional_context。
 // codebuddy 与 WorkBuddy 都是 Claude Code 系：PascalCase 事件名，输出 hookSpecificOutput.additionalContext。
 // 输入字段两边都能读：codebuddy 给 user_prompt，WorkBuddy 给 prompt。
 const CLAUDE_STYLE_AGENTS = new Set(['codebuddy', 'workbuddy'])
-const CLAUDE_STYLE_EVENTS = new Set(['UserPromptSubmit', 'SessionStart', 'Stop'])
-const CURSOR_EVENTS = new Set(['beforeSubmitPrompt', 'sessionStart', 'stop'])
+const CLAUDE_STYLE_EVENTS = new Set(['UserPromptSubmit', 'SessionStart', 'Stop', 'PostToolUse'])
+const CURSOR_EVENTS = new Set(['beforeSubmitPrompt', 'sessionStart', 'stop', 'postToolUse'])
 
 // 三端事件名归一成语义相同的三类。
 const EVENT_KIND = {
@@ -39,6 +39,8 @@ const EVENT_KIND = {
   UserPromptSubmit: 'prompt',
   stop: 'stop',
   Stop: 'stop',
+  postToolUse: 'post-tool',
+  PostToolUse: 'post-tool',
 }
 
 function readStdin() {
@@ -130,6 +132,18 @@ async function runHook(argv) {
     return
   }
 
+  if (kind === 'post-tool') {
+    let context = ''
+    try {
+      const settings = await loadSettings()
+      if (settings.enabled && settings.sideJudge) context = await issuePermitFromTool(payload)
+    } catch (e) {
+      console.error(`[memory] 发放写入许可失败: ${e.message}`)
+    }
+    process.stdout.write(JSON.stringify(wrapInjection(agent, event, context)))
+    return
+  }
+
   if (kind === 'stop') {
     await handleStop(payload)
     let followup = null
@@ -155,7 +169,7 @@ async function runHook(argv) {
   }
 
   const recalled = kind === 'session-start' ? '' : await renderRecall([promptText])
-  const hidden = kind === 'prompt' ? modelNoticeForUserText(promptText) : ''
+  const hidden = kind === 'prompt' ? await hiddenNoticeForPrompt(agent, promptText) : ''
   const text = kind === 'session-start'
     ? await renderSessionStart()
     : [hidden, recalled].filter(Boolean).join('\n\n')

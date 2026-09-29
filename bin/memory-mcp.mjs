@@ -9,6 +9,7 @@ import { recall } from '../lib/core/recall.mjs'
 import { inferGroup, mergeMemory, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
 import { dropCandidate, listCandidates } from '../lib/core/candidates.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
+import { consumeSidePermit } from '../lib/core/sidepath.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
 
@@ -44,7 +45,7 @@ const TOOLS = [
   },
   {
     name: 'memory_persist',
-    description: '把记忆正式写入。仅在 memory_propose 之后、且（确认模式下）用户已确认时调用。',
+    description: '把记忆正式写入。阻塞模式在 memory_propose 之后、且用户已确认时调用。旁路确认模式只在点选返回并拿到一次性 permit 之后调用，permit 对不上会拒绝。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -56,6 +57,7 @@ const TOOLS = [
         },
         evidence: { type: 'string' },
         confidence: { type: 'number', description: '用户表达的明确程度 0~1，越明确越高，下限按 0.5 处理' },
+        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['text', 'category'],
       additionalProperties: false,
@@ -63,22 +65,26 @@ const TOOLS = [
   },
   {
     name: 'memory_reinforce',
-    description: '强化一条已有记忆（置信度 +0.1、观测次数 +1）。当用户重复表达了已存在的记忆时调用，而不要新建重复条目。',
+    description: '强化一条已有记忆（置信度 +0.1、观测次数 +1）。阻塞模式在用户确认强化后调用。旁路确认模式只在拿到一次性 permit 之后调用。',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string', description: 'memory_propose 或 memory_read 返回的记忆 id' } },
+      properties: {
+        id: { type: 'string', description: '要强化的已有记忆 id' },
+        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
+      },
       required: ['id'],
       additionalProperties: false,
     },
   },
   {
     name: 'memory_merge',
-    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1、观测次数 +1）。仅在用户确认「合并」后调用。',
+    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1、观测次数 +1）。旁路确认模式只在拿到一次性 permit 之后调用。',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: '要改写的已有记忆 id' },
         text: { type: 'string', description: '合并后的自包含中文正文，写当前生效的结论' },
+        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['id', 'text'],
       additionalProperties: false,
@@ -118,11 +124,11 @@ const TOOLS = [
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] })
 
-// 旁路不向客户端暴露这些写工具。阻塞式由 tools/setup.mjs blocking 装上 MCP 后才会出现。
-const WRITE_TOOLS = new Set(['memory_propose', 'memory_persist', 'memory_reinforce', 'memory_merge'])
+// 旁路不暴露 memory_propose。另外三个写工具可见，但必须带点选后发放的 permit。
+const SIDEPATH_HIDDEN = new Set(['memory_propose'])
 
 function sidepathWriteRefusal() {
-  return text('当前是旁路模式，没有写记忆工具。沉淀由后台完成。切换到阻塞式请运行 node tools/setup.mjs blocking，然后重启客户端。')
+  return text('当前是旁路模式，没有 memory_propose。要不要记由后台判断。')
 }
 
 const PROPOSE_TOP_K = 2
@@ -182,7 +188,7 @@ async function memoryRead(args) {
 async function listTools() {
   const settings = await loadSettings()
   if (!settings.sideJudge) return TOOLS
-  return TOOLS.filter((tool) => !WRITE_TOOLS.has(tool.name))
+  return TOOLS.filter((tool) => !SIDEPATH_HIDDEN.has(tool.name))
 }
 
 async function memoryPropose(args) {
@@ -263,7 +269,10 @@ function blockingDedupConfirm(content, guess, similar) {
 
 async function memoryPersist(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) return sidepathWriteRefusal()
+  if (settings.sideJudge) {
+    const result = await consumeSidePermit('memory_persist', args)
+    return text(result.message)
+  }
   const mem = await persistMemory({
     text: args.text,
     category: args.category,
@@ -276,14 +285,20 @@ async function memoryPersist(args) {
 
 async function memoryReinforce(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) return sidepathWriteRefusal()
+  if (settings.sideJudge) {
+    const result = await consumeSidePermit('memory_reinforce', args)
+    return text(result.message)
+  }
   const mem = await reinforceMemory(String(args.id || '').trim())
   return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次）`)
 }
 
 async function memoryMerge(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) return sidepathWriteRefusal()
+  if (settings.sideJudge) {
+    const result = await consumeSidePermit('memory_merge', args)
+    return text(result.message)
+  }
   const mem = await mergeMemory(String(args.id || '').trim(), args.text)
   return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，观测 ${mem.observations} 次，id ${mem.id}）`)
 }
@@ -296,7 +311,7 @@ async function memoryReview() {
     .map((c, i) => `${i + 1}. ${c.text}\n   出现 ${c.observations} 次，最近 ${String(c.lastSeen).slice(0, 10)}，指纹 ${c.fingerprint}`)
     .join('\n')
   const tail = settings.sideJudge
-    ? '旁路模式没有写记忆工具，候选不能从这里落成。丢弃用 memory_discard。'
+    ? '旁路模式没有 memory_propose，候选不能从这里落成。丢弃用 memory_discard。'
     : '请整理成编号列表询问用户：沉淀哪些、归到哪个标签、哪些丢弃。确认后对沉淀项调 memory_persist，对丢弃项调 memory_discard。'
   return text(`${items.length} 条待确认候选（按出现次数降序）：\n${body}\n\n${tail}`)
 }

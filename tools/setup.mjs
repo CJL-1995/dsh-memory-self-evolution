@@ -24,11 +24,13 @@ const CURSOR_EVENTS = [
   { event: 'sessionStart', timeout: 10 },
   { event: 'beforeSubmitPrompt', timeout: 5 },
   { event: 'stop', timeout: 20 },
+  { event: 'postToolUse', timeout: 10 },
 ]
 const CODEBUDDY_EVENTS = [
   { event: 'SessionStart', timeout: 10 },
   { event: 'UserPromptSubmit', timeout: 10 },
   { event: 'Stop', timeout: 20 },
+  { event: 'PostToolUse', timeout: 10 },
 ]
 
 function hookCommand(agent) {
@@ -319,5 +321,5 @@ if (chosenSidepath === false) {
   console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
 }
 if (chosenSidepath === true) {
-  console.log('重启后主模型看不到写记忆工具。沉淀由后台完成。')
+  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。点选前调用会被拒绝。')
 }
