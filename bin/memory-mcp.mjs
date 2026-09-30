@@ -185,7 +185,7 @@ async function memoryRead(args) {
   return text(`${head}\n${body}`)
 }
 
-// CodeBuddy / WorkBuddy 的旁路确认：点选后调用对应写工具即可，参数由插件从待确认提案里取。
+// 三端旁路确认：点选后调用对应写工具即可，参数由插件从当前客户端待确认提案里取。
 const PLUGIN_CONFIRM_ONLY = `仅在插件发起的记忆确认（弹窗标题为「${CONFIRM_TITLE}」）被用户点选后调用；不要在自行发起的确认之后调用，也不要主动调用。`
 const SIDEPATH_NO_PERMIT_DESC = {
   memory_persist: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「落成」或「仍新建」时调用，category 用选项里的标签。正文由插件按待确认提案写入，参数可以省略。选「不落成」不要调用。`,

@@ -42,13 +42,13 @@ npm run setup
 
 | 客户端 | hook | MCP |
 |---|---|---|
-| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop`、`postToolUse` | `mcp.json` 的 `memory-self-evolution` |
-| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop`、`PostToolUse` | `mcp.json` 的 `memory-self-evolution` |
-| WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop`、`PostToolUse` | `mcp.json` 的 `memory-self-evolution` |
+| Cursor（存在 `~/.cursor`） | `hooks.json` 的 `sessionStart`、`beforeSubmitPrompt`、`stop` | `mcp.json` 的 `memory-self-evolution` |
+| codebuddy（存在 `~/.codebuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
+| WorkBuddy（存在 `~/.workbuddy`） | `settings.json` 的 `SessionStart`、`UserPromptSubmit`、`Stop` | `mcp.json` 的 `memory-self-evolution` |
 
 三端各自启动同一套 MCP 程序，共享本机记忆文件，不是共用一个常驻进程。旁路还是阻塞不改变装上去的程序，只改变 `config.json` 里的 `sideJudge`。进程启动后读这个值：旁路不列出 `memory_propose`，`memory_persist`、`memory_reinforce`、`memory_merge` 仍然列出。阻塞四个都列出。hook 两组模式都装，和通路无关。
 
-注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。之后只改通路时运行 `node tools/setup.mjs sidepath` 或 `node tools/setup.mjs blocking`，不再提问，同样会先确认模型缓存再重新注册。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
+注册完成后重启 Cursor、codebuddy 和 WorkBuddy，MCP 才会加载。之后只改通路时运行 `node tools/setup.mjs sidepath` 或 `node tools/setup.mjs blocking`，不再提问，同样会先确认模型缓存再重新注册；重新注册会清理旧版本遗留的本插件工具后 Hook，不影响其他插件。WorkBuddy 的 `UserPromptSubmit` 超时 10 秒，宿主会等 hook 返回后再把本轮交给模型，和 codebuddy 相同。
 
 ## 卸载
 
@@ -64,7 +64,7 @@ npm run uninstall
 
 沉淀只走一条通路，由 `sideJudge` 决定。`confirm` 只决定写盘前弹不弹确认，两条通路都适用。
 
-**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写。permit 只对 Cursor 生效：用户点选返回后，`postToolUse` 生成一次性 permit 放进模型上下文，主模型再调用对应写工具并带上 permit；permit 对不上或点选前就调用会拒绝，选「不落成」不发 permit。CodeBuddy 和 WorkBuddy 不校验 permit：点选后主模型选合并就调 `memory_merge`、选强化就调 `memory_reinforce`、选落成就调 `memory_persist`，参数可以省略，插件按待确认提案写入；新一次弹窗会作废之前问过但没点选的提案。这两端的 MCP 靠 `mcp.json` 里的 `--agent` 区分，旧安装需重新运行 `node tools/setup.mjs sidepath`。使用 CodeBuddy IDE 自定义智能体时，工具白名单里要包含 `ask_followup_question`，否则无法弹窗。阻塞模式不校验 permit。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
+**旁路（`sideJudge=true`，安装时直接回车即此项）。** hook 在后台判断这句该不该记，不挡住本轮回答。工具列表里没有 `memory_propose`，有 `memory_persist`、`memory_reinforce`、`memory_merge`。`confirm=false` 时后台直接写入、强化或合并，`stop` 只让主模型把结果原样展示出来。`confirm=true` 时，`stop` 让主模型弹出确认，先不写；用户点选后，主模型选合并就调 `memory_merge`、选强化就调 `memory_reinforce`、选落成或仍新建就调 `memory_persist`。参数可以省略，插件按当前客户端已展示的待确认提案写入；正文、目标记忆和合并正文不能由主模型覆盖。没有待确认提案时拒绝写入，新一次弹窗会作废同一客户端之前问过但没点选的提案。MCP 靠 `mcp.json` 里的 `--agent` 区分客户端。Cursor 当前不会为 `AskQuestion` 触发工具后 Hook，因此这条链路依赖主模型遵守“点选后调用”的指令，但待确认提案限制能阻止无提案写入和参数篡改。使用 CodeBuddy IDE 自定义智能体时，工具白名单里必须包含 `ask_followup_question`，否则无法弹窗。三端共用同一条旁路：请求 `sideApiBase/chat/completions`，模型为 `sideApiModel`，密钥为 `side-secret.json` 的 `apiKey`。这三项没有缺省值。没配齐或调用失败时，这一轮不写、也不弹窗。
 
 **阻塞（`sideJudge=false`）。** 旁路不启动。先运行 `node tools/setup.mjs blocking`，它把 `sideJudge` 写成 false，并把 MCP 装到本机已有的 Cursor、codebuddy、WorkBuddy。重启客户端后，主模型才能看到写记忆工具。你说「以后都要先跑测试再提交」，主模型调 `memory_propose` 拿到相近记忆和分组建议。`confirm=true` 时再用宿主应用内提问工具请你确认后落盘。Cursor 弹出 `AskQuestion`，CodeBuddy 和 WorkBuddy 弹出 `AskUserQuestion`。`confirm=false` 时，分组信号明确就按判重提示直接落盘；信号缺失时仍弹确认。`memory_propose` 返回最相近的两条记忆和相似度，由主模型判断新建、强化或合并。切回旁路运行 `node tools/setup.mjs sidepath`，然后重启。
 
@@ -83,7 +83,7 @@ node bin/memory.mjs rule add "所有异常处理处都需要添加日志"
 
   > 记忆由 memory-self-evolution 插件在后台判断。用户陈述偏好、规范或要求记住时，你只需回应并照做：不要判断是否该记，不要调用提问工具发起「检测到一条记忆」确认，不要调用 memory_persist、memory_reinforce、memory_merge。只有收到含 MEMORY_CONFIRM_V1 的插件指令时，才按指令弹窗。
 
-  插件发起的确认弹窗标题固定为「记忆确认·插件」。CodeBuddy、WorkBuddy 下写工具的描述要求只在这类弹窗被点选后调用，用来和模型自行模仿发起的弹窗区分。
+  插件发起的确认弹窗标题固定为「记忆确认·插件」。三端写工具的描述都要求只在这类弹窗被点选后调用，用来和模型自行模仿发起的弹窗区分；旁路没有待确认提案时会拒绝写入。
 
 - **阻塞模式**：保留规则列表、项目概览、沉淀规则及候选提示，由主模型判重并选择动作。
 - **规则上限**：两种模式都从未废弃的 `rule` 中按已存储置信度降序选前 50 条，同分时最近活跃的在前。每轮语义召回仍从全部未废弃的 `rule` 和 `project` 中检索，不受该 50 条限制。
@@ -140,7 +140,7 @@ npm run verify                                # 用当前用户的记忆池验�
 | `memory_discard` | 丢弃候选 |
 | `memory_config` | 查看或修改配置 |
 
-`memory_propose` 只在阻塞模式出现。旁路模式仍列出 `memory_persist`、`memory_reinforce`、`memory_merge`，但必须带点选后发放的一次性 permit。`memory_propose` 不落盘：它返回最相近的两条记忆和相似度，让主模型判断新建、强化或合并。相似度越高越应当强化，而不是新建。
+`memory_propose` 只在阻塞模式出现。旁路模式仍列出 `memory_persist`、`memory_reinforce`、`memory_merge`，但只消费当前客户端已展示的待确认提案；无提案时拒绝写入。`memory_propose` 不落盘：它返回最相近的两条记忆和相似度，让主模型判断新建、强化或合并。相似度越高越应当强化，而不是新建。
 
 ## 配置
 

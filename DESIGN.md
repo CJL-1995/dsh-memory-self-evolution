@@ -242,7 +242,7 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 
 沉淀只走一条通路，由 `sideJudge` 决定，和 `confirm` 无关。
 
-- `sideJudge=true`：旁路，见 §6.4。`memory_propose` 不出现在客户端工具列表里。`memory_persist`、`memory_reinforce`、`memory_merge` 出现，但只接受点选后发放的一次性 permit。没有 permit 或对不上就拒绝，不写盘。阻塞模式不校验 permit。
+- `sideJudge=true`：旁路，见 §6.4。`memory_propose` 不出现在客户端工具列表里。`memory_persist`、`memory_reinforce`、`memory_merge` 只用于执行插件确认弹窗对应的待确认提案；没有提案时拒绝写入，不能回退为普通参数写入。
 - `sideJudge=false`：阻塞。旁路不启动。主模型调用 `memory_propose`。切换到这条通路只能运行 `node tools/setup.mjs blocking`，它写入 `sideJudge=false` 并把 MCP 装到已安装的 Cursor、codebuddy、WorkBuddy。切回旁路用 `node tools/setup.mjs sidepath`。`memory_config` 不能改 `sideJudge`。
 
 `confirm` 只决定写盘前要不要弹确认，两条通路都适用。
@@ -283,9 +283,9 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 1. `beforeSubmitPrompt` / `UserPromptSubmit` 把用户原话交给后台进程，自己马上返回召回结果。
 2. 后台用 API 调用模型，Cursor、CodeBuddy、WorkBuddy 共用，不走各家 CLI。请求 `sideApiBase/chat/completions`。`sideApiBase`、`sideApiModel`、`apiKey` 都没有缺省值，缺任何一项这一轮不写。前两项在 `config.json`，密钥在 `~/.memory-self-evolution/side-secret.json` 的 `apiKey`。判别只看用户原话，按显式指令、隐式偏好或项目事实、排除项的顺序决定。一次性执行、本次开发改动（即使句中有「以后」）、尚未定稿的方案讨论，不记。模型若只吐出一句陈述、没有 JSON，也按「要记」处理。库里已有记忆时，另一次调用把余弦最高的 3 条（含 id 和正文）交给判重模型。相似度只用来取出这 3 条，是否同一件事只看对象是不是同一个规则域。平台、语言不同仍是同一件事，适用范围扩大或收窄就合并，决定新增、强化已有，或合并成一条新正文。没配密钥或调用失败就记成「不是记忆」，会话照常结束。`stop` 只在宿主给的结束窗口里等一会儿；这一轮等不到就留在池里，下次结束再处理，不把结果丢掉。
 3. 模型认为该记，才向量化，并把相似度最高的 3 条交给判重模型，输出新增、强化（带回 id）或合并（带回 id 与合并后正文）。库为空则直接新增。模型拿不准或 id 对不上时，确认卡片上同时给出强化和新增。用户确认合并后，用新正文替换该条、删掉旧向量并重新向量化，再做一次强化。每句原话单独一份结果，不按会话覆盖。
-4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆，只让主模型弹出确认，不写盘。Cursor 返回 `followup_message`，下一轮 `beforeSubmitPrompt` 再补回完整确认指令。CodeBuddy / WorkBuddy 返回 `decision: block`，确认指令直接拼在 `reason` 里：CodeBuddy IDE 的 Stop 续轮只把 `reason` 交给模型，会丢弃 `additionalContext`。permit 只对 Cursor 生效：用户点选返回后，`postToolUse` 生成一次性 permit 放进 `additional_context`，主模型再调用 `memory_persist`、`memory_reinforce` 或 `memory_merge` 并带上 permit，参数必须与提案一致，选「不落成」不生成 permit。CodeBuddy / WorkBuddy 不校验 permit：CodeBuddy IDE 的 `ask_followup_question` 展示问题即返回，`PostToolUse` 拿不到选择；点选以 `<question_answer>` 作为下一条输入只交给模型，传给 `UserPromptSubmit` 的 `prompt` 为空；Stop 续轮注入的指令也不进入会话历史。因此这两端由主模型按点选调用对应写工具，参数可省略，MCP 按该端最近一次弹窗的待确认提案执行对应动作，没有提案时按传入参数直接写入；新一次弹窗会作废此前问过但未点选的提案。MCP 通过 `mcp.json` 中的 `--agent` 区分客户端，缺省按 Cursor 处理。`<question_answer>` 答复不交给旁路判别。自定义智能体的工具白名单里必须包含 `ask_followup_question`，否则模型只能用文字提问。为 false 时不弹确认：旁路在后台直接写入、强化或合并，不发 permit。`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
+4. `confirm` 在这里同样只控制弹不弹确认。为 true 时，`stop` 取出池里全部待确认记忆，只让主模型弹出确认，不写盘。Cursor 返回 `followup_message`，下一轮 `beforeSubmitPrompt` 再补回完整确认指令。CodeBuddy / WorkBuddy 返回 `decision: block`，确认指令直接拼在 `reason` 里：CodeBuddy IDE 的 Stop 续轮只把 `reason` 交给模型，会丢弃 `additionalContext`。用户点选后，三端都由主模型按选项调用 `memory_persist`、`memory_reinforce` 或 `memory_merge`；参数可以省略，MCP 按当前客户端已展示的待确认提案执行对应动作。正文、目标 id 和合并正文来自提案，只有新建分组允许按用户选项覆盖。没有待确认提案时拒绝写入，不能回退为普通参数写入；新一次弹窗会作废同一客户端此前问过但未点选的提案。MCP 通过 `mcp.json` 中的 `--agent` 区分客户端。Cursor 当前不会为 `AskQuestion` 触发工具后 Hook，因此无法在插件侧技术验证点选，只能依赖主模型遵守调用时机；提案限制负责阻止无提案写入和参数篡改。`<question_answer>` 答复不交给旁路判别。自定义智能体的工具白名单里必须包含 `ask_followup_question`，否则模型只能用文字提问。为 false 时不弹确认：旁路在后台直接写入、强化或合并；`stop` 仍开一轮，只要求主模型把结果文案原样展示给用户，不再提问。
 
-问过但还没写完的提案留在池里，等 permit 被消费或用户选「不落成」。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
+问过但还没写完的提案留在池里，等主模型在用户点选后调用对应写工具；用户选「不落成」时不调用，新一次弹窗会清理旧提案。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
 
 ## 7. 并发与容错
 
@@ -294,9 +294,9 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 - **正式记忆统一写锁**：新建、强化、合并、实际召回奖励、废弃状态刷新共用 `withMemoryWriteLock()`。持锁后读取最新记录，再追加或原子替换组文件，并同步快照，避免高频召回加分与后台写入互相覆盖。
 - **锁的获取与恢复**：先创建带唯一持有者标记的准备目录，再原子重命名为 `.memory-write.lock`；锁竞争最多等待 5 秒。确认持有者进程已退出后回收，活跃进程不会被强行抢锁；空的遗留锁目录可被替换。异常时清理准备目录、释放锁并记录原因。
 - **短临界区**：置信度奖励按组批量更新；模型编码、向量重建放在写锁外。正式记忆的读改写仍使用临时文件加 `rename`，不仅靠单次文件写入原子性保证增量不丢失。
-- **范围限制**：向量索引、配置、旁路任务与 permit 不在这把锁的保护范围内。它不等于跨文件事务或端到端恰好一次提交；多组奖励中途失败可能已有部分组写入，同一 hook 重试也可能再次加分。
+- **范围限制**：向量索引、配置与旁路任务不在这把锁的保护范围内。它不等于跨文件事务或端到端恰好一次提交；多组奖励中途失败可能已有部分组写入，同一 hook 重试也可能再次加分。
 
-hook 仍以不中断用户任务为原则降级。召回检索失败时不注入该记忆块；召回置信度更新失败时记录命中 ID 和原因，保留召回正文。入口未处理异常才输出空 JSON 并以 0 退出。现有 `permit` 校验保持不变。
+hook 仍以不中断用户任务为原则降级。召回检索失败时不注入该记忆块；召回置信度更新失败时记录命中 ID 和原因，保留召回正文。入口未处理异常才输出空 JSON 并以 0 退出。旁路写工具没有可执行的待确认提案时直接拒绝，不触发底层写入。
 
 ### 索引版本号
 
@@ -336,9 +336,10 @@ V8 单字符串上限约 5.4 亿字符，按每条 15.4KB 算，**到大约 3.4 
 
 | 脚本 | 用途 |
 |---|---|
-| `tests/confidence.test.mjs` | 25 项隔离功能回归：置信度、工具入口、模式、并发、兼容与 CodeBuddy 免 permit 确认 |
+| `tests/confidence.test.mjs` | 26 项隔离功能回归：置信度、工具入口、模式、并发、兼容与三端旁路确认 |
 | `tests/decay.test.mjs` | 22 项每日衰减回归：实际扣分、衰减天数、时间戳、跨会话去重、失败重试与三端 hook |
-| `tests/settings.test.mjs` | 3 项配置回归：`decayDays` 默认值、非法值回退、修改校验；`npm test` 共运行 50 项 |
+| `tests/hook-config.test.mjs` | 3 项安装配置回归：清理三端旧工具后 Hook，并保留其他插件配置 |
+| `tests/settings.test.mjs` | 3 项配置回归：`decayDays` 默认值、非法值回退、修改校验；`npm test` 共运行 54 项 |
 | `tools/verify-gate.mjs` | 召回与门控的回归基线，`npm run verify`；使用当前用户记忆池和本机 `verify-cases.json` 用例，可能补建索引 |
 | `tools/rebuild-index.mjs` | 按当前编码重建向量索引 |
 | `tools/migrate-groups.mjs` | 旧标签布局迁移到 rule/project 两组 |
