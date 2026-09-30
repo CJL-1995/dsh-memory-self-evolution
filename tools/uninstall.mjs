@@ -109,6 +109,7 @@ function removeConfig() {
   const targets = [
     path.join(dataDir, 'config.json'),
     path.join(dataDir, 'side-secret.json'),
+    path.join(dataDir, 'session-secret'),
     path.join(dataDir, 'side'),
   ]
   for (const target of targets) {

@@ -143,7 +143,7 @@ async function runHook(argv) {
     try {
       const settings = await loadSettings()
       if (settings.enabled && settings.sideJudge && promptText && !isUserNotice(promptText) && !promptText.includes(CONFIRM_MARK)) {
-        reminder = '记忆由 memory-self-evolution 插件在后台判断。用户陈述偏好、规范或要求记住时，你只需回应并照做：不要判断是否该记，不要调用提问工具发起「检测到一条记忆」确认，不要调用 memory_persist、memory_reinforce、memory_merge。只有收到含 MEMORY_CONFIRM_V1 的插件指令时，才按指令弹窗。'
+        reminder = '记忆由 memory-self-evolution 插件在后台判断。用户陈述偏好、规范或要求记住时，你只需回应并照做：不要判断是否该记，不要调用提问工具发起「检测到一条记忆」确认，也不要主动调用 memory_resolve 或其它记忆写工具。只有收到含 MEMORY_CONFIRM_V1 的插件指令时，才按指令弹窗并处理对应 sessionID。'
       }
       await maybeStartSideJob({ agent, payload, promptText })
     } catch (e) {
@@ -152,7 +152,7 @@ async function runHook(argv) {
   }
 
   const recalled = kind === 'session-start' ? '' : await renderRecall([promptText])
-  const hidden = kind === 'prompt' ? await hiddenNoticeForPrompt(agent, promptText) : ''
+  const hidden = kind === 'prompt' ? await hiddenNoticeForPrompt(agent, promptText, payload) : ''
   const text = kind === 'session-start'
     ? await renderSessionStart()
     : [hidden, reminder, recalled].filter(Boolean).join('\n\n')

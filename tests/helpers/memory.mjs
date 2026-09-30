@@ -13,7 +13,7 @@ export async function createMemoryHarness(t, options = {}) {
   const root = path.join(home, '.memory-self-evolution')
   await fsp.mkdir(root, { recursive: true })
   const errors = []
-  const state = { hits: [], recallError: null, writeError: false, failRenameTo: '', failRead: '', reads: new Map(), embeddedTexts: [], vectorRefreshes: 0 }
+  const state = { hits: [], recallError: null, writeError: false, failRenameTo: '', failRead: '', reads: new Map(), embeddedTexts: [], vectorRefreshes: 0, spawns: [] }
   const clock = { now: options.now ? new Date(options.now).getTime() : null }
   class TestDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.now ?? Date.now()])) }
@@ -25,7 +25,7 @@ export async function createMemoryHarness(t, options = {}) {
   const output = []
   const context = vm.createContext({
     console: { error: (...args) => errors.push(args.join(' ')), log: (...args) => output.push(args.join(' ')) },
-    process: { pid: process.pid, kill: process.kill.bind(process), env: {}, argv: ['node', 'memory.mjs', ...(options.argv || [])], stdin, stdout: { write: value => output.push(value) } },
+    process: { pid: process.pid, execPath: process.execPath, kill: process.kill.bind(process), env: {}, argv: ['node', 'memory.mjs', ...(options.argv || [])], stdin, stdout: { write: value => output.push(value) } },
     Date: TestDate, URL, AbortSignal, setTimeout, clearTimeout,
     fetch: () => { throw new Error('测试禁止网络请求') },
   })
@@ -55,6 +55,13 @@ export async function createMemoryHarness(t, options = {}) {
         },
       }
       mod = synthetic(identifier, { ...safeFs, default: safeFs })
+    } else if (identifier === 'node:child_process') {
+      mod = synthetic(identifier, {
+        spawn: (...args) => {
+          state.spawns.push(args)
+          return { unref() {} }
+        },
+      })
     } else if (identifier.startsWith('node:')) {
       mod = synthetic(identifier, await import(identifier))
     } else if (identifier === path.join(repo, 'lib/core/settings.mjs')) {

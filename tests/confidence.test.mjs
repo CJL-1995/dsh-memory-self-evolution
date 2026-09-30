@@ -233,6 +233,7 @@ test('MCP 不暴露 confidence 入参，旧客户端传值也不能改变初始�
     throw new Error(`等待 MCP 响应超时 method=${method}`)
   }
   const tools = (await call('tools/list')).result.tools
+  assert.equal(tools.some(tool => tool.name === 'memory_resolve'), false)
   assert.equal('confidence' in tools.find(tool => tool.name === 'memory_persist').inputSchema.properties, false)
   const persisted = await call('tools/call', { name: 'memory_persist', arguments: { text: 'MCP新记忆', category: 'rule', confidence: 9 } })
   assert.match(persisted.result.content[0].text, /置信度 0.5/)
@@ -276,39 +277,145 @@ test('持锁进程退出后自动恢复，空的遗留锁目录也不阻塞', as
   assert.equal((await h.records())[0].confidence, 0.6)
 })
 
-test('三端旁路确认均按当前客户端待确认提案执行且不需要 permit', async t => {
+test('HMAC sessionID 对同一轮输入稳定且不同输入不可复用', async t => {
+  const h = await createMemoryHarness(t)
+  const side = await h.load('lib/core/sidepath.mjs')
+  const payload = { conversation_id: 'conversation-a', generation_id: 'generation-a' }
+  const first = side.sessionIDFor('local-secret', 'cursor', payload, '记住这条项目事实')
+  const duplicate = side.sessionIDFor('local-secret', 'cursor', payload, '记住这条项目事实')
+
+  assert.equal(first, duplicate)
+  assert.match(first, /^s_[a-f0-9]{64}$/)
+  assert.notEqual(first, side.sessionIDFor('other-secret', 'cursor', payload, '记住这条项目事实'))
+  assert.notEqual(first, side.sessionIDFor('local-secret', 'cursor', { ...payload, generation_id: 'generation-b' }, '记住这条项目事实'))
+  assert.notEqual(first, side.sessionIDFor('local-secret', 'cursor', payload, '记住另一条项目事实'))
+})
+
+test('重复 prompt Hook 原子复用同一个 sessionID 且只启动一次分析', async t => {
+  const h = await createMemoryHarness(t)
+  const side = await h.load('lib/core/sidepath.mjs')
+  const payload = { conversation_id: 'conversation-a', generation_id: 'generation-a' }
+  const args = { agent: 'cursor', payload, promptText: '用户希望长期记住这条项目事实' }
+
+  const [first, duplicate] = await Promise.all([
+    side.maybeStartSideJob(args),
+    side.maybeStartSideJob(args),
+  ])
+  assert.equal(first, duplicate)
+  assert.match(first, /^s_[a-f0-9]{64}$/)
+  assert.equal(h.state.spawns.length, 1)
+  assert.equal((await fsp.readdir(path.join(h.root, 'side'))).filter(name => name.endsWith('.json')).length, 1)
+  assert.equal((await fsp.stat(path.join(h.root, 'session-secret'))).mode & 0o777, 0o600)
+
+  const file = path.join(h.root, 'side', `${first}.json`)
+  const job = JSON.parse(await fsp.readFile(file, 'utf8'))
+  await fsp.writeFile(file, JSON.stringify({ ...job, status: 'none', reason: 'not-memory' }))
+  assert.equal(await side.maybeStartSideJob(args), first)
+  assert.equal(h.state.spawns.length, 1)
+
+  const next = await side.maybeStartSideJob({ ...args, payload: { ...payload, generation_id: 'generation-b' } })
+  assert.notEqual(next, first)
+  assert.equal(h.state.spawns.length, 2)
+})
+
+test('缺少稳定会话 ID 时不启动旁路分析', async t => {
+  const h = await createMemoryHarness(t)
+  const side = await h.load('lib/core/sidepath.mjs')
+  const result = await side.maybeStartSideJob({
+    agent: 'cursor',
+    payload: { generation_id: 'generation-a' },
+    promptText: '用户希望长期记住这条项目事实',
+  })
+
+  assert.equal(result, undefined)
+  assert.equal(h.state.spawns.length, 0)
+  await assert.rejects(fsp.access(path.join(h.root, 'side')))
+  assert.ok(h.errors.some(line => line.includes('缺少稳定会话 ID')))
+})
+
+test('Stop 只弹出当前客户端当前会话的待确认任务', async t => {
   const h = await createMemoryHarness(t)
   const side = await h.load('lib/core/sidepath.mjs')
   const jobs = path.join(h.root, 'side')
   await fsp.mkdir(jobs)
-  async function proposal(id, agent, action, targetId, text) {
+  async function write(id, agent, sessionKey, text) {
+    await fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
+      id, agent, sessionKey, status: 'ready', prompted: false, applied: false,
+      startedAt: '2026-09-30T00:00:00.000Z',
+      proposal: { action: 'create', text, category: 'rule' },
+    }))
+  }
+  await write('s_cursor_a', 'cursor', 'conversation-a', 'Cursor A 记忆')
+  await write('s_cursor_b', 'cursor', 'conversation-b', 'Cursor B 记忆')
+  await write('s_codebuddy_a', 'codebuddy', 'conversation-a', 'CodeBuddy A 记忆')
+
+  const cursorA = await side.takeSideFollowup('cursor', { conversation_id: 'conversation-a' }, 0)
+  assert.match(cursorA.followup_message, /Cursor A 记忆/)
+  assert.doesNotMatch(cursorA.followup_message, /Cursor B 记忆|CodeBuddy A 记忆/)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 's_cursor_a.json'), 'utf8')).prompted, true)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 's_cursor_b.json'), 'utf8')).prompted, false)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 's_codebuddy_a.json'), 'utf8')).prompted, false)
+
+  const cursorB = await side.takeSideFollowup('cursor', { conversation_id: 'conversation-b' }, 0)
+  assert.match(cursorB.followup_message, /Cursor B 记忆/)
+  assert.doesNotMatch(cursorB.followup_message, /Cursor A 记忆|CodeBuddy A 记忆/)
+  const hiddenA = await side.hiddenNoticeForPrompt('cursor', cursorA.followup_message, { conversation_id: 'conversation-a' })
+  const hiddenB = await side.hiddenNoticeForPrompt('cursor', cursorB.followup_message, { conversation_id: 'conversation-b' })
+  assert.match(hiddenA, /sessionID：s_cursor_a/)
+  assert.doesNotMatch(hiddenA, /s_cursor_b/)
+  assert.match(hiddenB, /sessionID：s_cursor_b/)
+  assert.doesNotMatch(hiddenB, /s_cursor_a/)
+
+  const codebuddyA = await side.takeSideFollowup('codebuddy', { session_id: 'conversation-a' }, 0)
+  assert.match(codebuddyA.reason, /CodeBuddy A 记忆/)
+  assert.doesNotMatch(codebuddyA.reason, /Cursor A 记忆|Cursor B 记忆/)
+})
+
+test('memory_resolve 按 sessionID 统一执行五种旁路决策', async t => {
+  const h = await createMemoryHarness(t)
+  await h.seed('rule', [memory('old', { text: '旧规则' })])
+  const side = await h.load('lib/core/sidepath.mjs')
+  const jobs = path.join(h.root, 'side')
+  await fsp.mkdir(jobs)
+  async function proposal(id, agent, action, targetId, text, mergedText = '') {
     await fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
       id, agent, status: 'ready', prompted: true, applied: false,
       startedAt: `2026-09-30T00:00:0${id.slice(-1)}.000Z`,
-      proposal: { action, text, category: 'rule', targetId, mergedText: text },
+      proposal: { action, text, category: 'rule', targetId, targetText: targetId ? '旧规则' : '', mergedText },
     }))
   }
 
-  await proposal('j_1', 'cursor', 'create', '', 'Cursor 规则')
-  await proposal('j_2', 'codebuddy', 'create', '', 'CodeBuddy 规则')
-  assert.equal((await side.applyPendingByTool('memory_persist', {}, 'cursor')).ok, true)
-  const created = (await h.records())[0]
-  assert.equal(created.text, 'Cursor 规则')
-  assert.equal(created.confidence, 0.5)
+  await proposal('j_1', 'cursor', 'create', '', '新规则')
+  assert.equal((await side.resolvePendingSession('j_1', 'create_rule', 'cursor')).ok, true)
+  assert.equal((await h.records()).find(item => item.text === '新规则').category, 'rule')
 
-  await proposal('j_3', 'workbuddy', 'merge', created.id, '合并后的规则')
-  assert.equal((await side.applyPendingByTool('memory_merge', {}, 'workbuddy')).ok, true)
-  assert.equal((await h.records())[0].text, '合并后的规则')
-  assert.equal((await h.records())[0].confidence, 0.6)
+  await proposal('j_2', 'cursor', 'create', '', '项目事实')
+  assert.equal((await side.resolvePendingSession('j_2', 'create_project', 'cursor')).ok, true)
+  assert.equal((await h.records('project'))[0].text, '项目事实')
 
-  await proposal('j_4', 'cursor', 'reinforce', created.id, '合并后的规则')
-  assert.equal((await side.applyPendingByTool('memory_reinforce', {}, 'cursor')).ok, true)
-  assert.equal((await h.records())[0].confidence, 0.7)
-  assert.equal(await side.applyPendingByTool('memory_persist', {}, 'cursor'), null)
-  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'j_2.json'), 'utf8')).applied, false)
+  await proposal('j_3', 'cursor', 'reinforce', 'old', '旧规则')
+  assert.equal((await side.resolvePendingSession('j_3', 'reinforce', 'cursor')).ok, true)
+  assert.equal((await h.records()).find(item => item.id === 'old').confidence, 0.6)
+
+  await proposal('j_4', 'cursor', 'merge', 'old', '新说法', '合并后的规则')
+  assert.equal((await side.resolvePendingSession('j_4', 'merge', 'cursor')).ok, true)
+  assert.equal((await h.records()).find(item => item.id === 'old').text, '合并后的规则')
+
+  await proposal('j_5', 'cursor', 'create', '', '不应写入')
+  assert.equal((await side.resolvePendingSession('j_5', 'discard', 'cursor')).ok, true)
+  assert.equal((await h.records()).some(item => item.text === '不应写入'), false)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'j_5.json'), 'utf8')).reason, 'user-skip')
+
+  assert.equal((await side.resolvePendingSession('j_missing', 'create_rule', 'cursor')).ok, false)
+  await proposal('j_6', 'codebuddy', 'create', '', '其他客户端')
+  assert.equal((await side.resolvePendingSession('j_6', 'create_rule', 'cursor')).ok, false)
+  await proposal('j_7', 'cursor', 'create', '', '动作不匹配')
+  assert.equal((await side.resolvePendingSession('j_7', 'merge', 'cursor')).ok, false)
+  await proposal('j_8', 'cursor', 'reinforce', '', '缺少目标记忆')
+  assert.equal((await side.resolvePendingSession('j_8', 'reinforce', 'cursor')).ok, false)
 })
 
-test('Cursor 旁路写工具不暴露 permit 且无待确认提案时拒绝写入', async t => {
+test('旁路只暴露统一的 memory_resolve 工具', async t => {
   const h = await createMemoryHarness(t, { argv: ['--agent', 'cursor'] })
   h.settings.sideJudge = true
   await h.load('bin/memory-mcp.mjs')
@@ -325,28 +432,31 @@ test('Cursor 旁路写工具不暴露 permit 且无待确认提案时拒绝写�
   }
 
   const tools = (await call('tools/list')).result.tools
-  for (const name of ['memory_persist', 'memory_reinforce', 'memory_merge']) {
-    const tool = tools.find(item => item.name === name)
-    assert.equal('permit' in tool.inputSchema.properties, false)
-    assert.deepEqual(tool.inputSchema.required, [])
-  }
-  const result = await call('tools/call', { name: 'memory_persist', arguments: {} })
-  assert.match(result.result.content[0].text, /没有可执行的待确认记忆/)
+  assert.equal(tools.some(tool => tool.name === 'memory_persist'), false)
+  assert.equal(tools.some(tool => tool.name === 'memory_reinforce'), false)
+  assert.equal(tools.some(tool => tool.name === 'memory_merge'), false)
+  const resolve = tools.find(tool => tool.name === 'memory_resolve')
+  assert.deepEqual(resolve.inputSchema.required, ['sessionID', 'decision'])
+  assert.deepEqual(resolve.inputSchema.properties.decision.enum, ['create_rule', 'create_project', 'reinforce', 'merge', 'discard'])
+  const result = await call('tools/call', { name: 'memory_resolve', arguments: { sessionID: 'missing', decision: 'discard' } })
+  assert.match(result.result.content[0].text, /未找到可处理的记忆分析会话/)
   await assert.rejects(fsp.access(path.join(h.root, 'rule.jsonl')))
 })
 
-test('三端 Stop 续轮都要求点选后调用写工具且不要求 permit', async t => {
+test('三端 Stop 续轮都要求按 sessionID 调用 memory_resolve', async t => {
   const h = await createMemoryHarness(t)
   const side = await h.load('lib/core/sidepath.mjs')
   const proposal = { text: '新规则', category: 'rule', action: 'create' }
-  const model = side.buildFollowup('codebuddy', [{ proposal }])
+  const model = side.buildFollowup('codebuddy', [{ id: 'j_test', proposal }])
   assert.match(model, /ask_followup_question/)
-  assert.match(model, /memory_persist/)
+  assert.match(model, /memory_resolve/)
+  assert.match(model, /sessionID：j_test/)
+  assert.match(model, /create_rule/)
+  assert.match(model, /discard/)
   assert.match(model, /弹窗标题写「记忆确认·插件」/)
-  assert.doesNotMatch(model, /permit/)
-  const cursorModel = side.buildFollowup('cursor', [{ proposal }])
-  assert.match(cursorModel, /memory_persist/)
-  assert.doesNotMatch(cursorModel, /permit/)
+  assert.doesNotMatch(model, /memory_persist|memory_reinforce|memory_merge/)
+  const cursorModel = side.buildFollowup('cursor', [{ id: 'j_test', proposal }])
+  assert.match(cursorModel, /memory_resolve/)
   const out = side.buildStopResponse('codebuddy', '用户可见文案', model)
   assert.equal(out.decision, 'block')
   assert.ok(out.reason.startsWith('用户可见文案'))
@@ -357,7 +467,7 @@ test('三端 Stop 续轮都要求点选后调用写工具且不要求 permit', a
   assert.equal(cursor.followup_message, '用户可见文案')
 })
 
-test('codebuddy 点选后调用哪个写工具就按待确认提案执行，不需要参数和 permit', async t => {
+test('memory_resolve 只使用待确认提案中的正文和目标记忆', async t => {
   const h = await createMemoryHarness(t)
   await h.seed('rule', [memory('old', { text: '旧规则' })])
   const side = await h.load('lib/core/sidepath.mjs')
@@ -369,16 +479,16 @@ test('codebuddy 点选后调用哪个写工具就按待确认提案执行，不�
   assert.equal(side.shouldJudgePrompt('<question_answer><answers>不落成</answers></question_answer>'), false)
 
   await job('j_merge', { action: 'merge', text: '新说法', category: 'rule', targetId: 'old', targetText: '旧规则', mergedText: '合并后的规则' })
-  assert.equal((await side.applyPendingByTool('memory_merge', {}, 'codebuddy')).ok, true)
+  assert.equal((await side.resolvePendingSession('j_merge', 'merge', 'codebuddy')).ok, true)
   const merged = (await h.records())[0]
   assert.equal(merged.text, '合并后的规则')
   assert.equal(merged.confidence, 0.6)
 
   await job('j_create', { action: 'create', text: '新的项目事实', category: 'rule' })
-  assert.equal((await side.applyPendingByTool('memory_persist', { category: 'project' }, 'codebuddy')).ok, true)
+  assert.equal((await side.resolvePendingSession('j_create', 'create_project', 'codebuddy')).ok, true)
   assert.equal((await h.records('project'))[0].text, '新的项目事实')
 
-  assert.equal(await side.applyPendingByTool('memory_reinforce', {}, 'codebuddy'), null)
+  assert.equal((await side.resolvePendingSession('j_create', 'reinforce', 'codebuddy')).ok, false)
 })
 
 test('codebuddy 新一次弹窗会作废之前问过但未点选的提案', async t => {
@@ -387,12 +497,12 @@ test('codebuddy 新一次弹窗会作废之前问过但未点选的提案', asyn
   const jobs = path.join(h.root, 'side')
   await fsp.mkdir(jobs)
   const write = (id, extra) => fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
-    id, agent: 'codebuddy', status: 'ready', applied: false, startedAt: '2026-09-29T00:00:00.000Z',
+    id, agent: 'codebuddy', sessionKey: 'session-a', status: 'ready', applied: false, startedAt: '2026-09-29T00:00:00.000Z',
     proposal: { action: 'create', text: `提案 ${id}`, category: 'rule' }, ...extra,
   }))
   await write('j_stale', { prompted: true })
   await write('j_new', { prompted: false })
-  const out = await side.takeSideFollowup('codebuddy', {}, 0)
+  const out = await side.takeSideFollowup('codebuddy', { session_id: 'session-a' }, 0)
   assert.equal(out.decision, 'block')
   assert.match(out.reason, /提案 j_new/)
   assert.doesNotMatch(out.reason, /提案 j_stale/)

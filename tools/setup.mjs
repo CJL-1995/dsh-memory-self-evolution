@@ -324,5 +324,5 @@ if (chosenSidepath === false) {
   console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
 }
 if (chosenSidepath === true) {
-  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。三端都只在插件确认弹窗点选后调用对应写工具。')
+  console.log('重启后主模型只能看到旁路确认工具 memory_resolve，memory_propose、memory_persist、memory_reinforce、memory_merge 不列出。三端都在插件确认弹窗点选后按 sessionID 调用 memory_resolve。')
 }

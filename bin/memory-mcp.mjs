@@ -9,7 +9,7 @@ import { recall } from '../lib/core/recall.mjs'
 import { inferGroup, mergeMemory, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
 import { dropCandidate, listCandidates } from '../lib/core/candidates.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { CONFIRM_TITLE, applyPendingByTool } from '../lib/core/sidepath.mjs'
+import { resolvePendingSession } from '../lib/core/sidepath.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
 
@@ -91,6 +91,23 @@ const TOOLS = [
     },
   },
   {
+    name: 'memory_resolve',
+    description: '处理插件弹窗中的一条待确认记忆。仅旁路模式使用；sessionID 必须照抄插件提供的值，decision 必须与用户点选一致。正文、目标记忆和合并正文均由插件内部提案决定。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionID: { type: 'string', description: '插件为本次记忆分析颁发的 sessionID' },
+        decision: {
+          type: 'string',
+          enum: ['create_rule', 'create_project', 'reinforce', 'merge', 'discard'],
+          description: '用户最终选择的新建规则、新建项目事实、强化、合并或不落成',
+        },
+      },
+      required: ['sessionID', 'decision'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'memory_review',
     description: '列出从历史会话累积的待确认候选记忆（按出现次数降序）。用户说要处理候选、或会话开始提示有待确认候选时调用。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -124,8 +141,9 @@ const TOOLS = [
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] })
 
-// 旁路不暴露 memory_propose。另外三个写工具只用于执行插件确认弹窗对应的待确认提案。
-const SIDEPATH_HIDDEN = new Set(['memory_propose'])
+// 旁路只暴露统一确认工具；阻塞模式继续使用原有的提案与写入工具。
+const SIDEPATH_HIDDEN = new Set(['memory_propose', 'memory_persist', 'memory_reinforce', 'memory_merge'])
+const BLOCKING_HIDDEN = new Set(['memory_resolve'])
 
 function sidepathWriteRefusal() {
   return text('当前是旁路模式，没有 memory_propose。要不要记由后台判断。')
@@ -185,26 +203,10 @@ async function memoryRead(args) {
   return text(`${head}\n${body}`)
 }
 
-// 三端旁路确认：点选后调用对应写工具即可，参数由插件从当前客户端待确认提案里取。
-const PLUGIN_CONFIRM_ONLY = `仅在插件发起的记忆确认（弹窗标题为「${CONFIRM_TITLE}」）被用户点选后调用；不要在自行发起的确认之后调用，也不要主动调用。`
-const SIDEPATH_NO_PERMIT_DESC = {
-  memory_persist: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「落成」或「仍新建」时调用，category 用选项里的标签。正文由插件按待确认提案写入，参数可以省略。选「不落成」不要调用。`,
-  memory_reinforce: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「强化已有记忆」时调用。插件按待确认提案强化（置信度 +0.1），参数可以省略。选「不落成」不要调用。`,
-  memory_merge: `旁路记忆确认：${PLUGIN_CONFIRM_ONLY}用户点选「合并进已有记忆」时调用。插件按待确认提案合并（置信度 +0.1），参数可以省略。选「不落成」不要调用。`,
-}
-
 async function listTools() {
   const settings = await loadSettings()
-  if (!settings.sideJudge) return TOOLS
-  return TOOLS.filter((tool) => !SIDEPATH_HIDDEN.has(tool.name)).map((tool) => {
-    if (!SIDEPATH_NO_PERMIT_DESC[tool.name]) return tool
-    return { ...tool, description: SIDEPATH_NO_PERMIT_DESC[tool.name], inputSchema: { ...tool.inputSchema, required: [] } }
-  })
-}
-
-// 旁路写入只消费当前客户端的待确认提案，没有对应提案时由调用方拒绝写入。
-async function sidepathWrite(tool, args) {
-  return applyPendingByTool(tool, args, AGENT)
+  const hidden = settings.sideJudge ? SIDEPATH_HIDDEN : BLOCKING_HIDDEN
+  return TOOLS.filter((tool) => !hidden.has(tool.name))
 }
 
 async function memoryPropose(args) {
@@ -285,10 +287,7 @@ function blockingDedupConfirm(content, guess, similar) {
 
 async function memoryPersist(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) {
-    const result = await sidepathWrite('memory_persist', args)
-    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
-  }
+  if (settings.sideJudge) return text('旁路模式只允许使用 memory_resolve 处理插件待确认记忆。')
   const mem = await persistMemory({
     text: args.text,
     category: args.category,
@@ -300,22 +299,23 @@ async function memoryPersist(args) {
 
 async function memoryReinforce(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) {
-    const result = await sidepathWrite('memory_reinforce', args)
-    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
-  }
+  if (settings.sideJudge) return text('旁路模式只允许使用 memory_resolve 处理插件待确认记忆。')
   const mem = await reinforceMemory(String(args.id || '').trim())
   return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}）`)
 }
 
 async function memoryMerge(args) {
   const settings = await loadSettings()
-  if (settings.sideJudge) {
-    const result = await sidepathWrite('memory_merge', args)
-    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
-  }
+  if (settings.sideJudge) return text('旁路模式只允许使用 memory_resolve 处理插件待确认记忆。')
   const mem = await mergeMemory(String(args.id || '').trim(), args.text)
   return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}）`)
+}
+
+async function memoryResolve(args) {
+  const settings = await loadSettings()
+  if (!settings.sideJudge) return text('memory_resolve 仅用于旁路模式的插件确认流程。')
+  const result = await resolvePendingSession(args.sessionID, args.decision, AGENT)
+  return text(result.message)
 }
 
 async function memoryReview() {
@@ -357,6 +357,7 @@ const HANDLERS = {
   memory_persist: memoryPersist,
   memory_reinforce: memoryReinforce,
   memory_merge: memoryMerge,
+  memory_resolve: memoryResolve,
   memory_review: memoryReview,
   memory_discard: memoryDiscard,
   memory_config: memoryConfig,
