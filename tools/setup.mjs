@@ -14,6 +14,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { downloadModel } from '../lib/embedding.js'
+import { removePluginHookEvent } from '../lib/core/hook-config.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const nodeBin = process.execPath
@@ -24,13 +25,11 @@ const CURSOR_EVENTS = [
   { event: 'sessionStart', timeout: 10 },
   { event: 'beforeSubmitPrompt', timeout: 5 },
   { event: 'stop', timeout: 20 },
-  { event: 'postToolUse', timeout: 10 },
 ]
 const CODEBUDDY_EVENTS = [
   { event: 'SessionStart', timeout: 10 },
   { event: 'UserPromptSubmit', timeout: 10 },
   { event: 'Stop', timeout: 20 },
-  { event: 'PostToolUse', timeout: 10 },
 ]
 
 function hookCommand(agent) {
@@ -110,6 +109,8 @@ function registerCursor(home) {
   if (data.version == null) data.version = 1
   const command = hookCommand('cursor')
   const notes = []
+  const removed = removePluginHookEvent(data.hooks, 'postToolUse', 'cursor')
+  if (removed > 0) notes.push(`postToolUse removed ${removed}`)
   for (const spec of CURSOR_EVENTS) {
     if (!Array.isArray(data.hooks[spec.event])) data.hooks[spec.event] = []
     const action = upsertCursorHook(data.hooks[spec.event], command, spec.timeout)
@@ -130,6 +131,8 @@ function registerClaudeStyle(home, dirName, agent) {
   if (!data.hooks || typeof data.hooks !== 'object') data.hooks = {}
   const command = hookCommand(agent)
   const notes = []
+  const removed = removePluginHookEvent(data.hooks, 'PostToolUse', agent)
+  if (removed > 0) notes.push(`PostToolUse removed ${removed}`)
   for (const spec of CODEBUDDY_EVENTS) {
     if (!Array.isArray(data.hooks[spec.event])) data.hooks[spec.event] = []
     const action = upsertClaudeStyleHook(data.hooks[spec.event], command, spec.timeout, agent)
@@ -321,5 +324,5 @@ if (chosenSidepath === false) {
   console.log('重启后主模型才能看到 memory_propose、memory_persist、memory_reinforce、memory_merge。')
 }
 if (chosenSidepath === true) {
-  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。Cursor 下点选前调用会被拒绝；CodeBuddy、WorkBuddy 点选后直接调用。')
+  console.log('重启后主模型能看到 memory_persist、memory_reinforce、memory_merge。memory_propose 不列出。三端都只在插件确认弹窗点选后调用对应写工具。')
 }
