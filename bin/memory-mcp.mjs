@@ -9,14 +9,13 @@ import { recall } from '../lib/core/recall.mjs'
 import { inferGroup, mergeMemory, persistMemory, reinforceMemory } from '../lib/core/writer.mjs'
 import { dropCandidate, listCandidates } from '../lib/core/candidates.mjs'
 import { describeSettings, loadSettings, updateSetting } from '../lib/core/settings.mjs'
-import { CONFIRM_TITLE, applyPendingByTool, consumeSidePermit } from '../lib/core/sidepath.mjs'
+import { CONFIRM_TITLE, applyPendingByTool } from '../lib/core/sidepath.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
 
-// 由 setup 写进 mcp.json 的 --agent 决定。旁路 permit 只对 Cursor 生效；缺省按 Cursor 处理。
+// 由 setup 写进 mcp.json 的 --agent 决定，用于隔离不同客户端的旁路待确认提案。
 const agentIdx = process.argv.indexOf('--agent')
 const AGENT = agentIdx >= 0 ? String(process.argv[agentIdx + 1] || '') : ''
-const PERMIT_REQUIRED = AGENT !== 'codebuddy' && AGENT !== 'workbuddy'
 
 const TOOLS = [
   {
@@ -50,7 +49,7 @@ const TOOLS = [
   },
   {
     name: 'memory_persist',
-    description: '把记忆正式写入，初始置信度固定为 0.5。阻塞模式在 memory_propose 之后、且用户已确认时调用。旁路确认模式只在点选返回并拿到一次性 permit 之后调用，permit 对不上会拒绝。',
+    description: '把记忆正式写入，初始置信度固定为 0.5。阻塞模式在 memory_propose 之后、且用户已确认时调用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,7 +60,6 @@ const TOOLS = [
           description: 'rule=无条件遵守的偏好与规范，每轮都会注入；project=需要时才查阅的项目事实，靠相关性召回。拿不准时选 rule：漏判规则会让它静默失效，多判只是多占一点上下文。',
         },
         evidence: { type: 'string' },
-        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['text', 'category'],
       additionalProperties: false,
@@ -69,12 +67,11 @@ const TOOLS = [
   },
   {
     name: 'memory_reinforce',
-    description: '强化一条已有记忆（置信度 +0.1）。阻塞模式在用户确认强化后调用。旁路确认模式只在拿到一次性 permit 之后调用。',
+    description: '强化一条已有记忆（置信度 +0.1）。阻塞模式在用户确认强化后调用。',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: '要强化的已有记忆 id' },
-        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['id'],
       additionalProperties: false,
@@ -82,13 +79,12 @@ const TOOLS = [
   },
   {
     name: 'memory_merge',
-    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1）。旁路确认模式只在拿到一次性 permit 之后调用。',
+    description: '用合并后的正文替换一条已有记忆，丢掉旧向量并重新编码，同时做一次强化（置信度 +0.1）。',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: '要改写的已有记忆 id' },
         text: { type: 'string', description: '合并后的自包含中文正文，写当前生效的结论' },
-        permit: { type: 'string', description: '旁路确认模式必填：点选返回后上下文里的一次性 permit。阻塞模式不要传。' },
       },
       required: ['id', 'text'],
       additionalProperties: false,
@@ -128,7 +124,7 @@ const TOOLS = [
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] })
 
-// 旁路不暴露 memory_propose。另外三个写工具可见；Cursor 下必须带点选后发放的 permit。
+// 旁路不暴露 memory_propose。另外三个写工具只用于执行插件确认弹窗对应的待确认提案。
 const SIDEPATH_HIDDEN = new Set(['memory_propose'])
 
 function sidepathWriteRefusal() {
@@ -201,16 +197,14 @@ async function listTools() {
   const settings = await loadSettings()
   if (!settings.sideJudge) return TOOLS
   return TOOLS.filter((tool) => !SIDEPATH_HIDDEN.has(tool.name)).map((tool) => {
-    if (PERMIT_REQUIRED || !SIDEPATH_NO_PERMIT_DESC[tool.name]) return tool
-    const { permit, ...properties } = tool.inputSchema.properties
-    return { ...tool, description: SIDEPATH_NO_PERMIT_DESC[tool.name], inputSchema: { ...tool.inputSchema, properties, required: [] } }
+    if (!SIDEPATH_NO_PERMIT_DESC[tool.name]) return tool
+    return { ...tool, description: SIDEPATH_NO_PERMIT_DESC[tool.name], inputSchema: { ...tool.inputSchema, required: [] } }
   })
 }
 
-// 旁路写入：Cursor 校验 permit；另外两端按待确认提案执行，没有对应提案时返回 null，按参数直接写入。
+// 旁路写入只消费当前客户端的待确认提案，没有对应提案时由调用方拒绝写入。
 async function sidepathWrite(tool, args) {
-  if (PERMIT_REQUIRED) return consumeSidePermit(tool, args)
-  return applyPendingByTool(tool, args)
+  return applyPendingByTool(tool, args, AGENT)
 }
 
 async function memoryPropose(args) {
@@ -293,7 +287,7 @@ async function memoryPersist(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
     const result = await sidepathWrite('memory_persist', args)
-    if (result) return text(result.message)
+    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
   }
   const mem = await persistMemory({
     text: args.text,
@@ -308,7 +302,7 @@ async function memoryReinforce(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
     const result = await sidepathWrite('memory_reinforce', args)
-    if (result) return text(result.message)
+    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
   }
   const mem = await reinforceMemory(String(args.id || '').trim())
   return text(`已强化 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}）`)
@@ -318,7 +312,7 @@ async function memoryMerge(args) {
   const settings = await loadSettings()
   if (settings.sideJudge) {
     const result = await sidepathWrite('memory_merge', args)
-    if (result) return text(result.message)
+    return text(result?.message || '没有可执行的待确认记忆，已拒绝写入。')
   }
   const mem = await mergeMemory(String(args.id || '').trim(), args.text)
   return text(`已合并进 ${mem.category} 中的记忆：${mem.text}（置信度 ${fmtConfidence(mem.confidence)}，id ${mem.id}）`)

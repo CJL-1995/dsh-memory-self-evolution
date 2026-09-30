@@ -276,32 +276,66 @@ test('持锁进程退出后自动恢复，空的遗留锁目录也不阻塞', as
   assert.equal((await h.records())[0].confidence, 0.6)
 })
 
-test('旁路 permit 入口保持授权校验，并使用统一置信度规则', async t => {
+test('三端旁路确认均按当前客户端待确认提案执行且不需要 permit', async t => {
   const h = await createMemoryHarness(t)
   const side = await h.load('lib/core/sidepath.mjs')
   const jobs = path.join(h.root, 'side')
   await fsp.mkdir(jobs)
-  async function proposal(action, targetId, text) {
-    await fsp.writeFile(path.join(jobs, 'j_test.json'), JSON.stringify({
-      id: 'j_test', status: 'ready', prompted: true, applied: false,
+  async function proposal(id, agent, action, targetId, text) {
+    await fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
+      id, agent, status: 'ready', prompted: true, applied: false,
+      startedAt: `2026-09-30T00:00:0${id.slice(-1)}.000Z`,
       proposal: { action, text, category: 'rule', targetId, mergedText: text },
-      permit: { id: 'test-permit', action, text, category: 'rule', targetId },
     }))
   }
-  await proposal('create', '', '旁路规则')
-  assert.equal((await side.consumeSidePermit('memory_persist', { text: '旁路规则', category: 'rule' })).ok, false)
-  assert.equal((await side.consumeSidePermit('memory_persist', { text: '旁路规则', category: 'rule', permit: 'test-permit', confidence: 9 })).ok, true)
+
+  await proposal('j_1', 'cursor', 'create', '', 'Cursor 规则')
+  await proposal('j_2', 'codebuddy', 'create', '', 'CodeBuddy 规则')
+  assert.equal((await side.applyPendingByTool('memory_persist', {}, 'cursor')).ok, true)
   const created = (await h.records())[0]
+  assert.equal(created.text, 'Cursor 规则')
   assert.equal(created.confidence, 0.5)
-  await proposal('merge', created.id, '合并后的旁路规则')
-  assert.equal((await side.consumeSidePermit('memory_merge', { id: created.id, text: '合并后的旁路规则', permit: 'test-permit' })).ok, true)
+
+  await proposal('j_3', 'workbuddy', 'merge', created.id, '合并后的规则')
+  assert.equal((await side.applyPendingByTool('memory_merge', {}, 'workbuddy')).ok, true)
+  assert.equal((await h.records())[0].text, '合并后的规则')
   assert.equal((await h.records())[0].confidence, 0.6)
-  await proposal('reinforce', created.id, '合并后的旁路规则')
-  assert.equal((await side.consumeSidePermit('memory_reinforce', { id: created.id, permit: 'test-permit' })).ok, true)
+
+  await proposal('j_4', 'cursor', 'reinforce', created.id, '合并后的规则')
+  assert.equal((await side.applyPendingByTool('memory_reinforce', {}, 'cursor')).ok, true)
   assert.equal((await h.records())[0].confidence, 0.7)
+  assert.equal(await side.applyPendingByTool('memory_persist', {}, 'cursor'), null)
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'j_2.json'), 'utf8')).applied, false)
 })
 
-test('codebuddy 的 Stop 续轮把确认指令写进 reason，注明 ask_followup_question，且不要求 permit', async t => {
+test('Cursor 旁路写工具不暴露 permit 且无待确认提案时拒绝写入', async t => {
+  const h = await createMemoryHarness(t, { argv: ['--agent', 'cursor'] })
+  h.settings.sideJudge = true
+  await h.load('bin/memory-mcp.mjs')
+  let sequence = 0
+  async function call(method, params) {
+    const id = ++sequence
+    h.stdin.emit('data', JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    for (let i = 0; i < 200; i++) {
+      const result = h.output.map(line => JSON.parse(line)).find(message => message.id === id)
+      if (result) return result
+      await delay(10)
+    }
+    throw new Error(`等待 MCP 响应超时 method=${method}`)
+  }
+
+  const tools = (await call('tools/list')).result.tools
+  for (const name of ['memory_persist', 'memory_reinforce', 'memory_merge']) {
+    const tool = tools.find(item => item.name === name)
+    assert.equal('permit' in tool.inputSchema.properties, false)
+    assert.deepEqual(tool.inputSchema.required, [])
+  }
+  const result = await call('tools/call', { name: 'memory_persist', arguments: {} })
+  assert.match(result.result.content[0].text, /没有可执行的待确认记忆/)
+  await assert.rejects(fsp.access(path.join(h.root, 'rule.jsonl')))
+})
+
+test('三端 Stop 续轮都要求点选后调用写工具且不要求 permit', async t => {
   const h = await createMemoryHarness(t)
   const side = await h.load('lib/core/sidepath.mjs')
   const proposal = { text: '新规则', category: 'rule', action: 'create' }
@@ -310,7 +344,9 @@ test('codebuddy 的 Stop 续轮把确认指令写进 reason，注明 ask_followu
   assert.match(model, /memory_persist/)
   assert.match(model, /弹窗标题写「记忆确认·插件」/)
   assert.doesNotMatch(model, /permit/)
-  assert.match(side.buildFollowup('cursor', [{ proposal }]), /permit/)
+  const cursorModel = side.buildFollowup('cursor', [{ proposal }])
+  assert.match(cursorModel, /memory_persist/)
+  assert.doesNotMatch(cursorModel, /permit/)
   const out = side.buildStopResponse('codebuddy', '用户可见文案', model)
   assert.equal(out.decision, 'block')
   assert.ok(out.reason.startsWith('用户可见文案'))
@@ -333,16 +369,16 @@ test('codebuddy 点选后调用哪个写工具就按待确认提案执行，不�
   assert.equal(side.shouldJudgePrompt('<question_answer><answers>不落成</answers></question_answer>'), false)
 
   await job('j_merge', { action: 'merge', text: '新说法', category: 'rule', targetId: 'old', targetText: '旧规则', mergedText: '合并后的规则' })
-  assert.equal((await side.applyPendingByTool('memory_merge', {})).ok, true)
+  assert.equal((await side.applyPendingByTool('memory_merge', {}, 'codebuddy')).ok, true)
   const merged = (await h.records())[0]
   assert.equal(merged.text, '合并后的规则')
   assert.equal(merged.confidence, 0.6)
 
   await job('j_create', { action: 'create', text: '新的项目事实', category: 'rule' })
-  assert.equal((await side.applyPendingByTool('memory_persist', { category: 'project' })).ok, true)
+  assert.equal((await side.applyPendingByTool('memory_persist', { category: 'project' }, 'codebuddy')).ok, true)
   assert.equal((await h.records('project'))[0].text, '新的项目事实')
 
-  assert.equal(await side.applyPendingByTool('memory_reinforce', {}), null)
+  assert.equal(await side.applyPendingByTool('memory_reinforce', {}, 'codebuddy'), null)
 })
 
 test('codebuddy 新一次弹窗会作废之前问过但未点选的提案', async t => {
