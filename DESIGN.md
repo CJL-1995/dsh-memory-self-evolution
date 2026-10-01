@@ -287,7 +287,7 @@ hook 选**短命 CLI 进程**，MCP 由各客户端分别启动；不额外维�
 
 旁路任务按客户端和宿主会话双重隔离。Cursor 使用 `conversation_id`，CodeBuddy / WorkBuddy 使用 `session_id` 作为 sessionKey。`stop` 的等待、待确认收集、旧提案作废和结果通知都只处理 `agent + sessionKey` 同时匹配的任务；Cursor 保存的隐藏确认指令也按这两个维度拆文件，避免两个对话互相覆盖。缺少稳定会话 ID 时 fail closed，不创建分析任务，也不从全局池兜底。正式记忆仍是用户级共享资产，不随旁路任务做会话分区。
 
-问过但还没写完的提案留在池里，等主模型用 sessionID 调用 `memory_resolve`。用户选「不落成」，或提问工具返回 `Skipped`、用户关闭/取消弹窗时也必须调用，并用 `discard` 把该任务置为 `user-skip`；新一次弹窗会清理旧提案。若主模型漏调，每日遗忘扫描会清理前一天及更早、已经弹窗但仍未处理的任务并标记 `daily-zombie-cleanup`。当天任务和未弹窗任务不清理。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
+问过但还没写完的提案留在池里，等主模型用 sessionID 调用 `memory_resolve`。用户明确选择「不落成」时调用，并用 `discard` 把该任务置为 `user-skip`；提问工具自动返回 `Skipped`，或用户关闭/取消弹窗时不要调用 `memory_resolve`。新一次弹窗会清理旧提案；每日遗忘扫描会清理前一天及更早、已经弹窗但仍未处理的任务并标记 `daily-zombie-cleanup`。当天任务和未弹窗任务不清理。判断子进程带 `MEMORY_SIDE_JUDGE=1` 并关闭自己的 hook，避免再触发旁路。
 
 ## 7. 并发与容错
 
