@@ -453,6 +453,7 @@ test('三端 Stop 续轮都要求按 sessionID 调用 memory_resolve', async t =
   assert.match(model, /sessionID：j_test/)
   assert.match(model, /create_rule/)
   assert.match(model, /discard/)
+  assert.match(model, /Skipped.*discard/)
   assert.match(model, /弹窗标题写「记忆确认·插件」/)
   assert.doesNotMatch(model, /memory_persist|memory_reinforce|memory_merge/)
   const cursorModel = side.buildFollowup('cursor', [{ id: 'j_test', proposal }])

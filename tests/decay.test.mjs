@@ -95,6 +95,43 @@ test('多个并发sessionStart只执行一次日检', async t => {
   assert.equal(h.errors.filter(line => line.includes('每日衰减完成')).length, 1)
 })
 
+test('每日遗忘扫描顺带清理前一天已弹窗但未处理的僵尸任务', async t => {
+  const h = await createMemoryHarness(t, { now: START })
+  const jobs = path.join(h.root, 'side')
+  await fsp.mkdir(jobs)
+  async function write(id, extra) {
+    await fsp.writeFile(path.join(jobs, `${id}.json`), JSON.stringify({
+      id,
+      agent: 'cursor',
+      sessionKey: 'conversation-a',
+      status: 'ready',
+      prompted: true,
+      applied: false,
+      startedAt: daysAgo(h, 1),
+      promptedAt: daysAgo(h, 1),
+      proposal: { action: 'create', text: `提案 ${id}`, category: 'rule' },
+      ...extra,
+    }))
+  }
+  await write('zombie-old', {})
+  await write('pending-today', { startedAt: START, promptedAt: START })
+  await write('not-prompted', { prompted: false })
+
+  const render = await h.load('lib/core/render.mjs')
+  await render.renderSessionStart()
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'zombie-old.json'), 'utf8')).reason, 'daily-zombie-cleanup')
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'pending-today.json'), 'utf8')).status, 'ready')
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'not-prompted.json'), 'utf8')).status, 'ready')
+
+  await write('zombie-after-scan', {})
+  await render.renderSessionStart()
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'zombie-after-scan.json'), 'utf8')).status, 'ready')
+
+  h.clock.now += DAY
+  await render.renderSessionStart()
+  assert.equal(JSON.parse(await fsp.readFile(path.join(jobs, 'zombie-after-scan.json'), 'utf8')).reason, 'daily-zombie-cleanup')
+})
+
 test('不同进程共用当天执行标记，不重复扣分', async t => {
   const h = await createMemoryHarness(t, { now: START })
   await h.seed('rule', [memory('a', { lastSeen: daysAgo(h, 30) })])
@@ -176,7 +213,7 @@ for (const failingFile of ['project.jsonl', 'decay-state.json']) {
     const render = await h.load('lib/core/render.mjs')
     assert.match(await render.renderSessionStart(), /规则 r（置信度 0.45/)
     await assert.rejects(fsp.access(stateFile(h)), { code: 'ENOENT' })
-    assert.ok(h.errors.some(line => line.includes('每日衰减失败') && line.includes('模拟记忆写入失败')))
+    assert.ok(h.errors.some(line => line.includes('每日维护失败') && line.includes('模拟记忆写入失败')))
     h.state.failRenameTo = ''
     await render.renderSessionStart()
     assert.equal((await h.records())[0].confidence, 0.45)
